@@ -12,12 +12,14 @@
 
 TODO:
 
+- Checksum
 - DPad -> servo control
 - Relay PPZ -> UAV
 - Relay UAV -> PPZ
 
 Adruino:
 
+- Checksum
 - Maintain sync
 - Generate PPM
 
@@ -125,9 +127,9 @@ void translateJStoAF();
 // global config vars
 
 int toggle_buttons[12] = {
-0, 1, 0, 1, 
-0, 1, 0, 1, 
-0, 1, 0, 1
+0, 0, 0, 0, 
+0, 0, 0, 0, 
+0, 0, 0, 1
 };
 
 int button_state_count[12] = {
@@ -159,7 +161,7 @@ int xbee_port;
 int main (int argc, char **argv)
 {
 	int i, js_port;
-	char xbee_buffer;
+	char xbee_buffer[256];
 	char ppz_buffer;
 
 	// init airframe
@@ -222,9 +224,9 @@ int main (int argc, char **argv)
 		
 		// check XBee port
 
-		while(read(xbee_port, &xbee_buffer, 1) > 0) {
+		while(read(xbee_port, &xbee_buffer, 256) > 0) {
 
-			printf("%c\n", xbee_buffer);
+			printf("%s\n", xbee_buffer);
 
 		}
 
@@ -335,15 +337,23 @@ int openJoystick(char *portName) {
 
 int doHandshake(int xbee_port) {
 
-	char handshake_msg[MSG_SIZE];
+	unsigned char handshake_msg[MSG_SIZE];
+	//unsigned int checksum;
 	char handshake_ack[3];
 	int i, msg_wrote, handshook = 0;
+
+	//checksum = 0;
 
 	for(i = 0 ; i < MSG_SIZE ; i++) {
 
 		handshake_msg[i] = CMD_PREFIX;
+		//checksum = checksum + (unsigned int)CMD_PREFIX;
 
-	}	
+	}
+
+	// build checksum
+
+	//handshake_msg[MSG_SIZE - 1] = (unsigned char)(checksum & 0xFF);
 
 	printf("Handshaking...");
 
@@ -374,6 +384,11 @@ int doHandshake(int xbee_port) {
 	}
 
 	printf("...got ACK, handshake complete!\n");
+
+	// discard junk from Arduino
+
+	while(read(xbee_port, &handshake_ack, 1) > 0) {
+	}
 
 	return 1;	
 
@@ -561,7 +576,7 @@ void translateJStoAF() {
 	af_st.servos[SRV_L_ELEVRON] = combined_left;
 	af_st.servos[SRV_R_ELEVRON] = combined_right;
 
-	int throttle_esc = mapRange(0, 32767, 0, 255, js_st.axis[THROTTLE]);
+	int throttle_esc = mapRange(0, 32767, 0, 254, js_st.axis[THROTTLE]);
 	af_st.servos[SRV_ESC_LEFT] = throttle_esc;
 	af_st.servos[SRV_ESC_RIGHT] = throttle_esc;
 
@@ -580,6 +595,7 @@ void sendCtrlUpdate (int signum) {
 
 	int x, msg_wrote;
 	unsigned char xbee_msg[MSG_SIZE];
+	//unsigned int checksum;
 //	char xbee_decoded[1024];
 //	char buf[64];
 //	unsigned int pos;
@@ -616,6 +632,15 @@ void sendCtrlUpdate (int signum) {
 		xbee_msg[x + 9] = xbee_msg[x + 9] | (af_st.buttons[(x * 4) + 3] & 3);
 
 	}
+
+	// generate checksum
+	/*checksum = 0;
+	for(x = 0 ; x < (MSG_SIZE - 1); x++) {
+
+		checksum = checksum + (unsigned int)xbee_msg[x];
+
+	}
+	xbee_msg[MSG_SIZE - 1] = (unsigned char)checksum & 0xFF;*/
 
 	/* DEBUG display output state
 
