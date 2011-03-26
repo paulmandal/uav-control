@@ -13,15 +13,12 @@
 TODO:
 
 - DPad -> servo control
-- Generate JS state command every pulse
 - Relay PPZ -> UAV
 - Relay UAV -> PPZ
 
 Adruino:
 
-- Read + Interpret JS state command
-- Set in-memory JS model
-- Set digital pins
+- Maintain sync
 - Generate PPM
 
 */
@@ -51,7 +48,7 @@ Adruino:
 // definitions
 
 #define NAME_LENGTH 128
-#define PPM_INTERVAL 100000
+#define PPM_INTERVAL 20000
 #define JS_DISCARD_UNDER 5000
 #define CMD_PREFIX 0xFF
 #define MSG_SIZE 12
@@ -103,8 +100,8 @@ Adruino:
 // structures
 
 struct js_state {
-		int *axis;
-		char *button;	
+	int *axis;
+	char *button;	
 };
 
 struct airframe_state {
@@ -118,12 +115,12 @@ struct airframe_state {
 
 int mapRange(int a1,int a2,int b1,int b2,int s);
 void sendCtrlUpdate (int signum);
-void readJoystick(int js_port, struct js_state js_st);
+void readJoystick(int js_port);
 int openPort(char *portName, char *use);
 int openJoystick(char *portName);
 int doHandshake(int xbee_port);
 void setupTimer();
-void translateJStoAF(struct js_state js_st);
+void translateJStoAF();
 
 // global config vars
 
@@ -150,8 +147,10 @@ int dpad_state[2] = {
 // global variables to store states
 
 struct airframe_state af_st;
+struct js_state js_st;
 unsigned char axes = 2;
 unsigned char buttons = 2;
+int old_throttle = 0;
 int ppz_port;
 int xbee_port;
 
@@ -159,8 +158,7 @@ int xbee_port;
 
 int main (int argc, char **argv)
 {
-	int i, js_port, js_value, msg_wrote, old_throttle = 0;
-	struct js_state js_st;
+	int i, js_port;
 	char xbee_buffer;
 	char ppz_buffer;
 
@@ -216,20 +214,19 @@ int main (int argc, char **argv)
 
 		// check joystick
 
-		readJoystick(js_port, &js_st);
+		readJoystick(js_port);
 
 		// update Airframe model
 		
-		translateJStoAF(js_st);
+		translateJStoAF();
 		
 		// check XBee port
 
 		while(read(xbee_port, &xbee_buffer, 1) > 0) {
 
-			printf("%s", xbee_buffer);
+			printf("%c\n", xbee_buffer);
 
 		}
-		printf("\n");
 
 		// check PPZ port
 
@@ -295,6 +292,7 @@ int openJoystick(char *portName) {
 	int btnmapok = 1;
 	int version = 0x000800;
 	char name[NAME_LENGTH] = "Unknown";
+	int fd, i;
 
 	printf("Opening joystick %s..\n", portName);
 	if ((fd = open(portName, O_RDONLY | O_NONBLOCK)) < 0) {
@@ -339,7 +337,7 @@ int doHandshake(int xbee_port) {
 
 	char handshake_msg[MSG_SIZE];
 	char handshake_ack[3];
-	bool handshook = false;
+	int i, msg_wrote, handshook = 0;
 
 	for(i = 0 ; i < MSG_SIZE ; i++) {
 
@@ -351,6 +349,8 @@ int doHandshake(int xbee_port) {
 
 	while(!handshook) {
 
+		printf(".");
+		fflush(stdout);
 		msg_wrote = write(xbee_port, handshake_msg, MSG_SIZE);
 		if(msg_wrote != MSG_SIZE) {
 
@@ -358,13 +358,13 @@ int doHandshake(int xbee_port) {
 
 		}
 
-		sleep(20); // 20ms to respond
+		usleep(10000); // 10ms to respond
 		
 		if(read(xbee_port, &handshake_ack, 3) == 3) {
 
 			if(!strcmp(handshake_ack, "ACK")) {
 
-				handshook = true;
+				handshook = 1;
 
 			}
 
@@ -390,19 +390,20 @@ void setupTimer() {
 	sa.sa_handler = &sendCtrlUpdate;
 	sigaction (SIGALRM, &sa, NULL);
 
-	timer.it_value.tv_sec = 1;
-	timer.it_value.tv_usec = 0;
-	timer.it_interval.tv_sec = 1;
-	timer.it_interval.tv_usec = 0;
+	timer.it_value.tv_sec = 0;
+	timer.it_value.tv_usec = PPM_INTERVAL;
+	timer.it_interval.tv_sec = 0;
+	timer.it_interval.tv_usec = PPM_INTERVAL;
 
 	printf("Starting pulse timer..\n");
 	setitimer (ITIMER_REAL, &timer, NULL);
 
 }
 
-void readJoystick(int js_port, struct js_state js_st) {
+void readJoystick(int js_port) {
 
 	struct js_event js;
+	int js_value;
 
 	while(read(js_port, &js, sizeof(struct js_event)) == sizeof(struct js_event)) {
 
@@ -502,7 +503,7 @@ void readJoystick(int js_port, struct js_state js_st) {
 
 }
 
-void translateJStoAF(struct js_state js_st) {
+void translateJStoAF() {
 
 	int x;
 	if(js_st.axis[ROLL] > 0) {
@@ -560,7 +561,7 @@ void translateJStoAF(struct js_state js_st) {
 	af_st.servos[SRV_L_ELEVRON] = combined_left;
 	af_st.servos[SRV_R_ELEVRON] = combined_right;
 
-	int throttle_esc = mapRange(-32767, 32767, 0, 255, js_st.axis[THROTTLE]);
+	int throttle_esc = mapRange(0, 32767, 0, 255, js_st.axis[THROTTLE]);
 	af_st.servos[SRV_ESC_LEFT] = throttle_esc;
 	af_st.servos[SRV_ESC_RIGHT] = throttle_esc;
 
@@ -577,41 +578,82 @@ void translateJStoAF(struct js_state js_st) {
 
 void sendCtrlUpdate (int signum) {
 
-	int x;
-	char *xbee_msg;
-	int msg_wrote = 0;
-	char pins[3];
+	int x, msg_wrote;
+	unsigned char xbee_msg[MSG_SIZE];
+//	char xbee_decoded[1024];
+//	char buf[64];
+//	unsigned int pos;
 
-	pins[0] = 0x00;
-	pins[1] = 0x00;
-	pins[2] = 0x00;
+	/* display in-memory state
 
-	xbee_msg = calloc(MSG_SIZE, sizeof(char));
-
-	xbee_msg = strcpy(xbee_msg, CMD_PREFIX);
+	printf("MEM: ");
 	for(x = 0 ; x < SERVO_COUNT ; x++) {
-		
-		xbee_msg = strcat(xbee_msg, af_st.servos[x]);
+
+		printf(" S%d-%03d", x, af_st.servos[x]);
+	
+	}
+
+	for(x = 0 ; x < 12 ; x++) {
+
+		printf(" P%d-%d", x, af_st.buttons[x]);
+
+	}
+
+	printf("\n");*/
+	
+	xbee_msg[0] = CMD_PREFIX;
+	for(x = 0 ; x < SERVO_COUNT ; x++) {
+
+		xbee_msg[x + 1] = (unsigned char)af_st.servos[x];
 
 	}
 
 	for(x = 0 ; x < 3 ; x++) {
 
-		pins[x] = pins[x] | (af_st.buttons[(x * 4)] & 2) << 6;
-		pins[x] = pins[x] | (af_st.buttons[(x * 4) + 1] & 2) << 4;
-		pins[x] = pins[x] | (af_st.buttons[(x * 4) + 2] & 2) << 2;
-		pins[x] = pins[x] | (af_st.buttons[(x * 4) + 3]);
+		xbee_msg[x + 9] = (af_st.buttons[(x * 4)] & 3) << 6;
+		xbee_msg[x + 9] = xbee_msg[x + 9] | (af_st.buttons[(x * 4) + 1] & 3) << 4;
+		xbee_msg[x + 9] = xbee_msg[x + 9] | (af_st.buttons[(x * 4) + 2] & 3) << 2;
+		xbee_msg[x + 9] = xbee_msg[x + 9] | (af_st.buttons[(x * 4) + 3] & 3);
 
 	}
 
-	xbee_msg = strcat(xbee_msg, pins[0]);
-	xbee_msg = strcat(xbee_msg, pins[1]);
-	xbee_msg = strcat(xbee_msg, pins[2]);
-	
+	/* DEBUG display output state
+
+	strcpy(xbee_decoded, "");
+
+	for(x = 0 ; x < SERVO_COUNT ; x++) {
+
+		
+		pos = (unsigned int)xbee_msg[x + 1];
+		sprintf(buf, " S%d-%03d", x, pos);
+		strcat(xbee_decoded, buf);
+
+	}
+
+	for(x = 0 ; x < 3 ; x++) {
+
+		pos = ((unsigned int)xbee_msg[x + 9] & 192) >> 6;
+		sprintf(buf, " P%d-%d", (x * 4), pos);
+		strcat(xbee_decoded, buf);
+		pos = ((unsigned int)xbee_msg[x + 9] & 48) >> 4;
+		sprintf(buf, " P%d-%d", (x * 4) + 1, pos);
+		strcat(xbee_decoded, buf);
+		pos = ((unsigned int)xbee_msg[x + 9] & 12) >> 2;
+		sprintf(buf, " P%d-%d", (x * 4) + 2, pos);
+		strcat(xbee_decoded, buf);
+		pos = ((unsigned int)xbee_msg[x + 9] & 3);
+		sprintf(buf, " P%d-%d", (x * 4) + 3, pos);
+		strcat(xbee_decoded, buf);
+
+
+	}
+
+	printf("MSG: %s\n\n", xbee_decoded);*/
+
 	msg_wrote = write(xbee_port, xbee_msg, MSG_SIZE);
-	if(msg_wrote != cmd_size) {
+	if(msg_wrote != MSG_SIZE) {
 				
-		printf("error writing to XBee, wrote: %d, cmd_size: %d\n", msg_wrote, cmd_size);
+		printf("error writing to XBee, wrote: %d, cmd_size: %d\n", msg_wrote, MSG_SIZE);
 
 	}
 
