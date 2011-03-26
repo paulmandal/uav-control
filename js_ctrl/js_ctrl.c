@@ -12,16 +12,14 @@
 
 TODO:
 
-- Checksum
 - DPad -> servo control
 - Relay PPZ -> UAV
 - Relay UAV -> PPZ
 
 Adruino:
 
-- Checksum
-- Maintain sync
 - Generate PPM
+- Relay PPZ<->GCS
 
 */
 
@@ -53,7 +51,7 @@ Adruino:
 #define PPM_INTERVAL 20000
 #define JS_DISCARD_UNDER 5000
 #define CMD_PREFIX 0xFF
-#define MSG_SIZE 12
+#define MSG_SIZE 13
 #define CAM_PAN 4
 #define CAM_TILT 5
 #define ROLL 0
@@ -123,6 +121,7 @@ int openJoystick(char *portName);
 int doHandshake(int xbee_port);
 void setupTimer();
 void translateJStoAF();
+void printState();
 
 // global config vars
 
@@ -221,6 +220,10 @@ int main (int argc, char **argv)
 		// update Airframe model
 		
 		translateJStoAF();
+
+		// print JS & AF state
+		
+		//printState();
 		
 		// check XBee port
 
@@ -338,24 +341,28 @@ int openJoystick(char *portName) {
 int doHandshake(int xbee_port) {
 
 	unsigned char handshake_msg[MSG_SIZE];
-	//unsigned int checksum;
-	char handshake_ack[3];
+	unsigned int checksum;
+	char handshake_ack[4];
 	int i, msg_wrote, handshook = 0;
 
-	//checksum = 0;
-
-	for(i = 0 ; i < MSG_SIZE ; i++) {
+	for(i = 0 ; i < (MSG_SIZE - 1) ; i++) {
 
 		handshake_msg[i] = CMD_PREFIX;
-		//checksum = checksum + (unsigned int)CMD_PREFIX;
-
+		
 	}
 
 	// build checksum
 
-	//handshake_msg[MSG_SIZE - 1] = (unsigned char)(checksum & 0xFF);
+	checksum = 0x00;
+	for(i = 0 ; i < (MSG_SIZE - 1) ; i++) {
 
-	printf("Handshaking...");
+		checksum = checksum ^ (unsigned int)handshake_msg[i];
+
+	}
+
+	handshake_msg[MSG_SIZE - 1] = (unsigned char)checksum & 0xFF;
+
+	printf("Handshaking");
 
 	while(!handshook) {
 
@@ -368,22 +375,21 @@ int doHandshake(int xbee_port) {
 
 		}
 
-		usleep(10000); // 10ms to respond
+		usleep(20000); // 20ms to respond
 		
 		if(read(xbee_port, &handshake_ack, 3) == 3) {
 
-			if(!strcmp(handshake_ack, "ACK")) {
+			if(handshake_ack[0] == 'A' && handshake_ack[1] == 'C' && handshake_ack[2] == 'K') {//!strcmp(handshake_ack, "ACK")) {
 
 				handshook = 1;
 
-			}
+			} 
 
 		}
 
-
 	}
 
-	printf("...got ACK, handshake complete!\n");
+	printf("got ACK, handshake complete!\n");
 
 	// discard junk from Arduino
 
@@ -595,27 +601,7 @@ void sendCtrlUpdate (int signum) {
 
 	int x, msg_wrote;
 	unsigned char xbee_msg[MSG_SIZE];
-	//unsigned int checksum;
-//	char xbee_decoded[1024];
-//	char buf[64];
-//	unsigned int pos;
-
-	/* display in-memory state
-
-	printf("MEM: ");
-	for(x = 0 ; x < SERVO_COUNT ; x++) {
-
-		printf(" S%d-%03d", x, af_st.servos[x]);
-	
-	}
-
-	for(x = 0 ; x < 12 ; x++) {
-
-		printf(" P%d-%d", x, af_st.buttons[x]);
-
-	}
-
-	printf("\n");*/
+	unsigned int checksum;
 	
 	xbee_msg[0] = CMD_PREFIX;
 	for(x = 0 ; x < SERVO_COUNT ; x++) {
@@ -634,46 +620,13 @@ void sendCtrlUpdate (int signum) {
 	}
 
 	// generate checksum
-	/*checksum = 0;
+	checksum = 0x00;
 	for(x = 0 ; x < (MSG_SIZE - 1); x++) {
 
-		checksum = checksum + (unsigned int)xbee_msg[x];
+		checksum = checksum ^ (unsigned int)xbee_msg[x];
 
 	}
-	xbee_msg[MSG_SIZE - 1] = (unsigned char)checksum & 0xFF;*/
-
-	/* DEBUG display output state
-
-	strcpy(xbee_decoded, "");
-
-	for(x = 0 ; x < SERVO_COUNT ; x++) {
-
-		
-		pos = (unsigned int)xbee_msg[x + 1];
-		sprintf(buf, " S%d-%03d", x, pos);
-		strcat(xbee_decoded, buf);
-
-	}
-
-	for(x = 0 ; x < 3 ; x++) {
-
-		pos = ((unsigned int)xbee_msg[x + 9] & 192) >> 6;
-		sprintf(buf, " P%d-%d", (x * 4), pos);
-		strcat(xbee_decoded, buf);
-		pos = ((unsigned int)xbee_msg[x + 9] & 48) >> 4;
-		sprintf(buf, " P%d-%d", (x * 4) + 1, pos);
-		strcat(xbee_decoded, buf);
-		pos = ((unsigned int)xbee_msg[x + 9] & 12) >> 2;
-		sprintf(buf, " P%d-%d", (x * 4) + 2, pos);
-		strcat(xbee_decoded, buf);
-		pos = ((unsigned int)xbee_msg[x + 9] & 3);
-		sprintf(buf, " P%d-%d", (x * 4) + 3, pos);
-		strcat(xbee_decoded, buf);
-
-
-	}
-
-	printf("MSG: %s\n\n", xbee_decoded);*/
+	xbee_msg[MSG_SIZE - 1] = (unsigned char)checksum & 0xFF;
 
 	msg_wrote = write(xbee_port, xbee_msg, MSG_SIZE);
 	if(msg_wrote != MSG_SIZE) {
@@ -681,5 +634,34 @@ void sendCtrlUpdate (int signum) {
 		printf("error writing to XBee, wrote: %d, cmd_size: %d\n", msg_wrote, MSG_SIZE);
 
 	}
+
+}
+
+void printState() {
+
+	int i;
+	printf("\r");
+
+	if (axes) {
+		printf("Axes: ");
+		for (i = 0; i < axes; i++)
+			printf("%2d:%6d ", i, js_st.axis[i]);
+	}
+
+	printf("Servos: ");
+	for(i = 0 ; i < SERVO_COUNT ; i++) {
+
+		printf("%2d:%03d ", i, af_st.servos[i]);
+
+	}
+
+	printf("Pins: ");
+	for(i = 0 ; i < BUTTON_COUNT ; i++) {
+
+		printf("%2d:%d ", i, af_st.buttons[i]);
+
+	}
+
+	fflush(stdout);
 
 }
