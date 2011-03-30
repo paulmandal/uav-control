@@ -19,6 +19,8 @@ TODO:
 
 Adruino:
 
+- Handle digital pins/buttons
+- Handle 3-way switch (or servo it?)
 - Relay PPZ<->GCS
 
 */
@@ -181,7 +183,7 @@ int main (int argc, char **argv)
 	char *xbeePortFile = NULL;
 	char *ppzPortFile = NULL;
 
-	printf("Starting js_crl version %d.%d.%d...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);
+	printf("Starting js_crl version %d.%d.%d...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Print version information
 
 	if(readConfig(&xbeePortFile, &ppzPortFile, &joystickPortFile, &joystickEventFile) < 0) { // Read our config into our config vars
 
