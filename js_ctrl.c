@@ -15,6 +15,7 @@ TODO:
 - DPad -> servo control
 - Relay PPZ -> UAV
 - Relay UAV -> PPZ
+- Force feedback on RSSI weak/loss
 
 Adruino:
 
@@ -45,6 +46,10 @@ Adruino:
 #include <signal.h>
 
 /* Definitions */
+
+#define VERSION_MAJOR 2       // Version information, Major #
+#define VERSION_MINOR 0       // Minor #
+#define VERSION_MOD   0       // Mod #
 
 #define NAME_LENGTH 128       // Length of Joystick name
 #define PPM_INTERVAL 20000    // Interval for state send message
@@ -96,6 +101,9 @@ Adruino:
 #define SRV_CAM_PAN 6
 #define SRV_CAM_TILT 7
 
+#define CONFIG_FILE "js_ctrl.rc"  // Config file name
+#define CONFIG_FILE_MIN_COUNT 4   // # of variables stored in config file 
+
 /* Structures */
 
 struct jsState {  // Store the axis and button states globally accessible
@@ -120,11 +128,13 @@ void readJoystick(int jsPort);
 int openPort(char *portName, char *use);
 int openJoystick(char *portName);
 int doHandshake(int xbeePort);
+int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile, char **joystickEventFile);
 void setupTimer();
 void translateJStoAF();
 void printState();
 void initAirframe();
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
+char *fgetsNoNewline(char *s, int n, FILE *stream);
 
 /* Global configuration info */
 
@@ -166,26 +176,32 @@ int main (int argc, char **argv)
 	int jsPort;
 	char xbeeBuffer[256];
 	char ppzBuffer[256];
-	
-	if (argc < 4 || !strcmp("--help", argv[1])) {  // Check if the user entered the right parameters
-		puts("");
-		puts("Usage: js_ctrl <XBee UART> <PPZ UART> <joystick device>");
-		puts("");
+	char *joystickEventFile;
+	char *joystickPortFile;
+	char *xbeePortFile;
+	char *ppzPortFile;
+
+	printf("Starting js_crl version %d.%d.%d...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);
+
+	if(readConfig(&xbeePortFile, &ppzPortFile, &joystickPortFile, &joystickEventFile) < 0) { // Read our config into our config vars
+
+		perror("js_ctrl"); // Error reading config file
 		return 1;
+
 	}
 
 	initAirframe();  // Init airframe state
 
-	if((xbeePort = openPort(argv[argc - 3], "XBee")) < 0) { // open the XBee port
+	if((xbeePort = openPort(xbeePortFile, "XBee")) < 0) { // open the XBee port
 
 		return 1;
 	}
 
-	/*if((ppzPort = openPort(argv[argc - 2], "PPZ")) < 0) { // open the PPZ port
+	/*if((ppzPort = openPort(ppzPortFile, "PPZ")) < 0) { // open the PPZ port
 		return 1;
 	}*/
 
-	if((jsPort = openJoystick(argv[argc - 1])) < 0) { // open the Joystick
+	if((jsPort = openJoystick(joystickPortFile)) < 0) { // open the Joystick
 		return 1;
 	}
 
@@ -645,5 +661,108 @@ void printState() {
 	}
 
 	fflush(stdout);
+
+}
+
+/* readConfig() - Read values from configuration file */
+
+int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile, char **joystickEventFile) {
+
+	FILE *fp;
+	int readCount = 0, lineBuffer = 1024;
+	char line[lineBuffer];
+	if ((fp = fopen(CONFIG_FILE, "r")) == NULL) {  // Open the config file read-only
+		
+		return -1;  // Return -1 if error opening
+
+	} else {
+
+		while (fgetsNoNewline(line, lineBuffer, fp) != NULL) {  // Read the entire file checking it line by line
+
+			if(strcmp(line, "[XBee Port File]") == 0) {  // Line matches a config variable header, read the next line (value) and store it
+		
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+					
+					*xbeePortFile = calloc(strlen(line) + 1, sizeof(char));  // Allocate memory for our variable
+					strcpy(*xbeePortFile, line);                             // Copy value into our var
+					readCount++;                                            // Increment our value count
+
+				}
+
+			} else if(strcmp(line, "[PPZ Port File]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					*ppzPortFile = calloc(strlen(line) + 1, sizeof(char));
+					strcpy(*ppzPortFile, line);
+					readCount++;
+
+				}
+
+			} else if(strcmp(line, "[Joystick Port File]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					*joystickPortFile = calloc(strlen(line) + 1, sizeof(char));
+					strcpy(*joystickPortFile, line);
+					readCount++;
+
+				}
+
+			} else if(strcmp(line, "[Joystick Event File]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					*joystickEventFile = calloc(strlen(line) + 1, sizeof(char));
+					strcpy(*joystickEventFile, line);
+					readCount++;
+
+				}
+
+			}
+
+		}
+
+	}
+
+	fclose(fp);
+
+	printf("\nUsing config from %s:\n", CONFIG_FILE); // Print config values
+	printf("       XBee Port: %s\n", *xbeePortFile);
+	printf("        PPZ Port: %s\n", *ppzPortFile);
+	printf("   Joystick Port: %s\n", *joystickPortFile);
+	printf("  Joystick Event: %s\n\n", *joystickEventFile);
+
+	if(readCount >= CONFIG_FILE_MIN_COUNT) {
+
+		return 1;  // Read enough config variables, success
+
+	} else {
+
+		return -1;  // Didn't read enough of config values
+
+	}	
+
+}
+
+/* fgetsNoNewline() - Wrapper for fgets() that returns a string without the newline */
+
+char *fgetsNoNewline(char *s, int n, FILE *stream) {
+
+	char *newLine;
+	if(fgets(s, n, stream) != NULL) {
+
+		if((newLine = strrchr(s, '\n')) != NULL) {
+
+			*newLine = '\0';
+
+		}
+		return s;
+
+	} else {
+
+		return NULL;
+
+	}
 
 }
