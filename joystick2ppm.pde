@@ -18,7 +18,9 @@
 
 /* This is the defining moment of the file */
 
-#define VERSION 2
+#define VERSION_MAJOR 2     // Major version #
+#define VERSION_MINOR 0     // Minor #
+#define VERSION_MOD   0     // Mod #
 
 #define MSG_SIZE 13         // Length of control update messages
 #define MSG_BEGIN 0xFF      // Begin of control message indicator byte
