@@ -18,7 +18,7 @@ TODO:
 
 Adruino:
 
-- Generate PPM
+- Airframe lights (flashin' lights lights lights lights)
 - Relay PPZ<->GCS
 
 */
@@ -362,7 +362,7 @@ int doHandshake(int xbee_port) {
 
 	handshake_msg[MSG_SIZE - 1] = (unsigned char)checksum & 0xFF;
 
-	printf("Handshaking");
+	printf("Handshaking..");
 
 	while(!handshook) {
 
