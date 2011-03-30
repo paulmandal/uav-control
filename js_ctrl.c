@@ -176,10 +176,10 @@ int main (int argc, char **argv)
 	int jsPort;
 	char xbeeBuffer[256];
 	char ppzBuffer[256];
-	char *joystickEventFile;
-	char *joystickPortFile;
-	char *xbeePortFile;
-	char *ppzPortFile;
+	char *joystickEventFile = NULL;
+	char *joystickPortFile = NULL;
+	char *xbeePortFile = NULL;
+	char *ppzPortFile = NULL;
 
 	printf("Starting js_crl version %d.%d.%d...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);
 
