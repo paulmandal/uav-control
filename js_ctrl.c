@@ -358,7 +358,9 @@ int doHandshake(int xbeePort) {
 
 	unsigned char handshakeMsg[MSG_SIZE_SYNC];
 	unsigned int checksum;
-	char handshakeAck[MSG_SIZE_SYNC];
+	unsigned char handshakeAck[MSG_SIZE_SYNC];
+	unsigned char testChar;
+	unsigned char msgType;
 	int i, handshook = 0;
 
 	handshakeMsg[0] = MSG_BEGIN;
@@ -382,28 +384,46 @@ int doHandshake(int xbeePort) {
 
 	while(!handshook) {
 
-		printf(".");
+		//printf(".");
 		fflush(stdout);
 		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
-		usleep(20000);                                           // Give 20ms to respond
+		usleep(100000);                                           // Give 20ms to respond
 		
-		if(read(xbeePort, &handshakeAck, MSG_SIZE_SYNC) == MSG_SIZE_SYNC) {  // Grab latest msg from XBee port
+		i = 0;
+		while(read(xbeePort, &testChar, 1) == 1) {
 
-			if(handshakeAck[0] == MSG_BEGIN && handshakeAck[1] == MSG_TYPE_SYNC) { // Message looks good so far, 
+			if(testChar == MSG_BEGIN) { // This is a begin message, let's check the type
+	
+				handshakeAck[i] = testChar; // Store the begin msg byte
+				i++;
+		
+				while(read(xbeePort, &msgType, 1) != 1) {} // Try to read until we get something (DEBUG: may want to add a timer to break this
+				if(msgType == MSG_TYPE_SYNC) {  // This is a sync msg
 
-				checksum = 0x00;
-				for(i = 0 ; i < MSG_SIZE_SYNC ; i++) {
+					handshakeAck[i] = msgType;
+					i++;
+					for(i = 2 ; i < MSG_SIZE_SYNC ; i++) {
 
-					checksum = checksum ^ (unsigned int)handshakeAck[i];  // Verify the checksum
+						read(xbeePort, &testChar, 1);
+						handshakeAck[i] = testChar;  // Read the rest of the sync msg into our buffer
+
+					}
+
+					checksum = 0x00;
+					for(i = 0 ; i < MSG_SIZE_SYNC ; i++) {
+
+						checksum = checksum ^ (unsigned int)handshakeAck[i];  // Verify the checksum
+	
+					}
+					if(checksum == 0x00) {
+
+						handshook = 1;  // Sync ack was valid
+
+					}
+					
 
 				}
-				if(checksum == 0x00) {
-
-					handshook = 1;  // Sync ack was valid
-
-				}
-
-			} 
+			}
 
 		}
 
