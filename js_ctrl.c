@@ -356,27 +356,27 @@ int openJoystick(char *portName) {
 
 int doHandshake(int xbeePort) {
 
-	unsigned char handshakeMsg[MSG_SIZE_CTRL];
+	unsigned char handshakeMsg[MSG_SIZE_SYNC];
 	unsigned int checksum;
-	char handshakeAck[4];
+	char handshakeAck[MSG_SIZE_SYNC];
 	int i, handshook = 0;
 
 	handshakeMsg[0] = MSG_BEGIN;
 	handshakeMsg[1] = MSG_TYPE_SYNC;
-	for(i = 2 ; i < (MSG_SIZE_CTRL - 1) ; i++) {
+	for(i = 2 ; i < (MSG_SIZE_SYNC - 1) ; i++) {
 
 		handshakeMsg[i] = rand() % 255;  // Build the handshake msg, it is MSG_BEGIN + MSG_TYPE_SYNC + random characters + checksum
 		
 	}
 
 	checksum = 0x00;
-	for(i = 0 ; i < (MSG_SIZE_CTRL - 1) ; i++) {
+	for(i = 0 ; i < (MSG_SIZE_SYNC - 1) ; i++) {
 
 		checksum = checksum ^ (unsigned int)handshakeMsg[i];  // Build the checksum
 
 	}
 
-	handshakeMsg[MSG_SIZE_CTRL - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
+	handshakeMsg[MSG_SIZE_SYNC - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
 
 	printf("Handshaking..");
 
@@ -384,25 +384,35 @@ int doHandshake(int xbeePort) {
 
 		printf(".");
 		fflush(stdout);
-		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_CTRL);  // Write the handshake to the XBee port
+		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
 		usleep(20000);                                           // Give 20ms to respond
 		
-		if(read(xbeePort, &handshakeAck, 3) == 3) {  // Grab latest msg from XBee port
+		if(read(xbeePort, &handshakeAck, MSG_SIZE_SYNC) == MSG_SIZE_SYNC) {  // Grab latest msg from XBee port
 
-			if(handshakeAck[0] == 'A' && handshakeAck[1] == 'C' && handshakeAck[2] == 'K') { // Check if msg contains ACK
+			if(handshakeAck[0] == MSG_BEGIN && handshakeAck[1] == MSG_TYPE_SYNC) { // Message looks good so far, 
 
-				handshook = 1;
+				checksum = 0x00;
+				for(i = 0 ; i < MSG_SIZE_SYNC ; i++) {
+
+					checksum = checksum ^ (unsigned int)handshakeAck[i];  // Verify the checksum
+
+				}
+				if(checksum == 0x00) {
+
+					handshook = 1;  // Sync ack was valid
+
+				}
 
 			} 
 
 		}
 
+		while(read(xbeePort, &handshakeAck, 1) > 0) {  // Discard XBee port buffer since it might have junk in it
+		}
+
 	}
 
 	printf("got ACK, handshake complete!\n");
-
-	while(read(xbeePort, &handshakeAck, 1) > 0) {  // Discard XBee port buffer since it might have junk in it
-	}
 
 	return 1;	
 
