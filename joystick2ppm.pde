@@ -348,9 +348,12 @@ void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh
 /* readSerialMessage(buffer, length) - Read a message from the Serial buffer */
 
 void readSerialMessage(unsigned char *buffer, int length) {
-
+  
+        // We're using either 38400 or 115200 bps for our comms here, so, 38400 / 8 = 4800 bytes/s, or 14400byte/s.
+        // That means on the low end we should receive a byte every 1/4800 seconds, or less than 1ms per byte.
 	int x;
-	while(Serial.available() < length) {}
+        unsigned long startTime = millis();
+	while(Serial.available() < length && (millis() - startTime < length)) {}  // Wait for it or time out if bytes don't come in a reasonable amount of time
 	for(x = 2 ; x < length ; x++) {  // Don't overwrite the msgBegin or msgType bytes
 
 		buffer[x] = Serial.read();
