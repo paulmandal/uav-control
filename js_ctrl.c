@@ -53,11 +53,19 @@ Adruino:
 #define VERSION_MINOR 0       // Minor #
 #define VERSION_MOD   0       // Mod #
 
+#define MSG_SIZE_CTRL 14      // Length of control update messages
+#define MSG_SIZE_SYNC 14      // Length of sync messages
+#define MSG_SIZE_PPZ  64      // Length of message from PPZ
+#define MSG_SZE_CFG   64      // Length of configuration message
+#define MSG_BEGIN     0xFF    // Begin of control message indicator byte
+#define MSG_TYPE_CTRL 0x01    // Control update message type indicator
+#define MSG_TYPE_CFG  0x02    // Configuration update
+#define MSG_TYPE_PPZ  0x03    // Message from PPZ
+#define MSG_TYPE_SYNC 0xFE    // Sync message type indicator
+
 #define NAME_LENGTH 128       // Length of Joystick name
 #define PPM_INTERVAL 20000    // Interval for state send message
 #define JS_DISCARD_UNDER 5000 // Discard joystick inputs under this level (joystick is very sensitive)
-#define CMD_PREFIX 0xFF       // Command prefix character
-#define MSG_SIZE 13           // State message size
 #define CAM_PAN 4             // Camera Pan axis #
 #define CAM_TILT 5            // Camera Tilt axis #
 #define ROLL 0                // Roll axis #
@@ -92,7 +100,7 @@ Adruino:
 #define CAM_PAN_MAX 180
 #define CAM_PAN_MIN 0
 
-#define PPZ_MSG_SIZE 1024
+#define PPZ_MSG_SIZE_CTRL 1024
 
 #define SRV_ESC_LEFT 0
 #define SRV_ESC_RIGHT 1
@@ -345,25 +353,27 @@ int openJoystick(char *portName) {
 
 int doHandshake(int xbeePort) {
 
-	unsigned char handshakeMsg[MSG_SIZE];
+	unsigned char handshakeMsg[MSG_SIZE_CTRL];
 	unsigned int checksum;
 	char handshakeAck[4];
 	int i, handshook = 0;
 
-	for(i = 0 ; i < (MSG_SIZE - 1) ; i++) {
+	handshakeMsg[0] = MSG_BEGIN;
+	handshakeMsg[1] = MSG_TYPE_SYNC;
+	for(i = 2 ; i < (MSG_SIZE_CTRL - 1) ; i++) {
 
-		handshakeMsg[i] = CMD_PREFIX;  // Build the handshake msg, it is all CMD_PREFIX chars + checksum
+		handshakeMsg[i] = MSG_BEGIN;  // Build the handshake msg, it is MSG_BEGIN + MSG_TYPE_SYNC + MSG_BEGIN(until end) + checksum
 		
 	}
 
 	checksum = 0x00;
-	for(i = 0 ; i < (MSG_SIZE - 1) ; i++) {
+	for(i = 0 ; i < (MSG_SIZE_CTRL - 1) ; i++) {
 
 		checksum = checksum ^ (unsigned int)handshakeMsg[i];  // Build the checksum
 
 	}
 
-	handshakeMsg[MSG_SIZE - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
+	handshakeMsg[MSG_SIZE_CTRL - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
 
 	printf("Handshaking..");
 
@@ -371,7 +381,7 @@ int doHandshake(int xbeePort) {
 
 		printf(".");
 		fflush(stdout);
-		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE);  // Write the handshake to the XBee port
+		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_CTRL);  // Write the handshake to the XBee port
 		usleep(20000);                                           // Give 20ms to respond
 		
 		if(read(xbeePort, &handshakeAck, 3) == 3) {  // Grab latest msg from XBee port
@@ -590,34 +600,35 @@ void translateJStoAF() {
 void sendCtrlUpdate (int signum) {
 
 	int x;
-	unsigned char xbeeMsg[MSG_SIZE];
+	unsigned char xbeeMsg[MSG_SIZE_CTRL];
 	unsigned int checksum;
 	
-	xbeeMsg[0] = CMD_PREFIX;  // First character of xbeeMsg is CMD_PREFIX
+	xbeeMsg[0] = MSG_BEGIN;      // First character of xbeeMsg is MSG_BEGIN
+	xbeeMsg[1] = MSG_TYPE_CTRL;  // Message type = control
 	for(x = 0 ; x < SERVO_COUNT ; x++) {
 
-		xbeeMsg[x + 1] = (unsigned char)airframeState.servos[x];  // Next 8 bytes are servo states
+		xbeeMsg[x + 2] = (unsigned char)airframeState.servos[x];  // Next 8 bytes are servo states
 
 	}
 
 	for(x = 0 ; x < 3 ; x++) {  // Next 3 bytes are 12 buttons, 2 bits per button
 
-		xbeeMsg[x + 9] = (airframeState.buttons[(x * 4)] & 3) << 6;                       // Mask away anything but the last 2 bits and then bitshift to the left
-		xbeeMsg[x + 9] = xbeeMsg[x + 9] | (airframeState.buttons[(x * 4) + 1] & 3) << 4;  // Mask away same, bitshift 4 to the left and bitwise OR to add this to our byte
-		xbeeMsg[x + 9] = xbeeMsg[x + 9] | (airframeState.buttons[(x * 4) + 2] & 3) << 2;  // Same
-		xbeeMsg[x + 9] = xbeeMsg[x + 9] | (airframeState.buttons[(x * 4) + 3] & 3);       // Same, no bitshift since we're already on the last two bits
+		xbeeMsg[x + 10] = (airframeState.buttons[(x * 4)] & 3) << 6;                       // Mask away anything but the last 2 bits and then bitshift to the left
+		xbeeMsg[x + 10] = xbeeMsg[x + 10] | (airframeState.buttons[(x * 4) + 1] & 3) << 4;  // Mask away same, bitshift 4 to the left and bitwise OR to add this to our byte
+		xbeeMsg[x + 10] = xbeeMsg[x + 10] | (airframeState.buttons[(x * 4) + 2] & 3) << 2;  // Same
+		xbeeMsg[x + 10] = xbeeMsg[x + 10] | (airframeState.buttons[(x * 4) + 3] & 3);       // Same, no bitshift since we're already on the last two bits
 
 	}
 
 	checksum = 0x00;
-	for(x = 0 ; x < (MSG_SIZE - 1); x++) {
+	for(x = 0 ; x < (MSG_SIZE_CTRL - 1); x++) {
 
 		checksum = checksum ^ (unsigned int)xbeeMsg[x]; // Generate checksum
 
 	}
-	xbeeMsg[MSG_SIZE - 1] = (unsigned char)checksum & 0xFF; // Last byte is checksum
+	xbeeMsg[MSG_SIZE_CTRL - 1] = (unsigned char)checksum & 0xFF; // Last byte is checksum
 
-	writePortMsg(xbeePort, "XBee", xbeeMsg, MSG_SIZE);
+	writePortMsg(xbeePort, "XBee", xbeeMsg, MSG_SIZE_CTRL);
 }
 
 /* writePortMsg(outputPort, portName, message, messageSize) - Write message to outputPort, deliver error if message fails to write */
