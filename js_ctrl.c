@@ -149,13 +149,13 @@ char *fgetsNoNewline(char *s, int n, FILE *stream);
 /* Global configuration info */
 
 int toggleButtons[12] = {  // Set which buttons are toggleable
-0, 0, 0, 0, 
 1, 0, 0, 0, 
+0, 0, 0, 0, 
 0, 0, 0, 0
 };
 
 int buttonStateCount[12] = {  // Set which buttons are multiple-state
-2, 0, 0, 0, 
+0, 0, 0, 0, 
 0, 0, 0, 0, 
 0, 0, 0, 0
 };
