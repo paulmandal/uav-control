@@ -53,7 +53,7 @@ Adruino:
 /* Definitions */
 
 #define VERSION_MAJOR 2       // Version information, Major #
-#define VERSION_MINOR 0       // Minor #
+#define VERSION_MINOR 1       // Minor #
 #define VERSION_MOD   0       // Mod #
 
 #define MSG_SIZE_CTRL 14      // Length of control update messages
@@ -140,7 +140,7 @@ void sendCtrlUpdate (int signum);
 void readJoystick(int jsPort);
 int openPort(char *portName, char *use);
 int openJoystick(char *portName);
-int doHandshake(int xbeePort);
+int sendHandshake(int xbeePort);
 int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile, char **joystickEventFile);
 void setupTimer();
 void translateJStoAF();
@@ -148,7 +148,9 @@ void printState();
 void initAirframe();
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
+void checkMessages();
 int testMessage(unsigned char *message, int length);
+void processMessage(unsigned char *message, int length);
 
 /* Global configuration info */
 
@@ -182,6 +184,12 @@ unsigned char buttons = 2;    // # of joystick buttons
 int oldThrottle = 0;         // Current/old throttle setting
 int ppzPort;                 // PPZ port FD
 int xbeePort;                // XBee port FD
+unsigned char inMsg[128];    // Incoming message buffer
+int msgWaitingBytes = 1;     // Message waiting byte count
+int readMsgBytes = 0;	     // How many bytes we've read so far
+int gotMsgBegin = 0;         // Mark whether or not we're currently reading a message
+int gotMsgType = 0;          // Mark whether we have a message type
+int handShook = 0;
 
 /* Main function */
 
@@ -221,9 +229,22 @@ int main (int argc, char **argv)
 		return 1;
 	}
 
-	if(doHandshake(xbeePort) < 0) { // do handshaking w/ Arduino
-		return 1;
+	printf("Handshaking..");
+
+	while(!handShook) {  // Handshaking loop
+
+		if(sendHandshake(xbeePort) < 0) { // Handshake with Arduino
+
+			perror("js_ctrl");
+			printf("Handshake failed..\n");
+			return 1;
+		}
+
+		checkMessages();
+
 	}
+
+	printf("got ACK, handshake complete!\n");
 
 	setupTimer(); 	// Set up timer (every 20ms)
 
@@ -355,16 +376,16 @@ int openJoystick(char *portName) {
 
 }
 
-/* doHandshake() - handshake with receiver */
+/* sendHandshake() - handshake with receiver */
 
-int doHandshake(int xbeePort) {
+int sendHandshake(int xbeePort) {
 
 	unsigned char handshakeMsg[MSG_SIZE_SYNC];
 	unsigned int checksum;
 	unsigned char handshakeAck[MSG_SIZE_SYNC];
 	unsigned char testChar;
 	unsigned char msgType = 0x00;
-	int i, handshook = 0;
+	int i;
 
 	handshakeMsg[0] = MSG_BEGIN;
 	handshakeMsg[1] = MSG_TYPE_SYNC;
@@ -383,89 +404,16 @@ int doHandshake(int xbeePort) {
 
 	handshakeMsg[MSG_SIZE_SYNC - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
 
-	printf("Handshaking..");
-
-	while(!handshook) {
+	while(!handShook) {
 
 		printf(".");
 		fflush(stdout);
 		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
 		usleep(20000);                                           // Give 20ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
-		
-		while(read(xbeePort, &testChar, 1) == 1) {
-
-			if(testChar == MSG_BEGIN) { // This is a begin message, let's check the type
-	
-				handshakeAck[0] = testChar; // Store the begin msg byte
-		
-				i = 0;
-				while(read(xbeePort, &msgType, 1) != 1 && i < 10) {
-
-					usleep(1000); // sleep 1ms, total 10ms for this character to arrive
-					i++;
-				} // Try to read until we get something (DEBUG: may want to add a timer to break this
-				if(msgType == MSG_TYPE_SYNC) {  // This is a sync msg
-
-					handshakeAck[1] = msgType;
-					for(i = 2 ; i < MSG_SIZE_SYNC ; i++) {
-
-						if(read(xbeePort, &testChar, 1) == 1) {
-
-							handshakeAck[i] = testChar;  // Read the rest of the sync msg into our buffer
-
-						} else {
-
-							handshakeAck[i] = 0x00;  // Blank character 'coz there is nothing in the buffer
-
-						}
-
-					}
-					
-					if(testMessage(handshakeAck, MSG_SIZE_SYNC) > 0) {
-
-						handshook = 1;  // Sync ack was valid
-
-					}
-					
-
-				}
-			} // Discard useless character
-
-		}
-
-		while(read(xbeePort, &handshakeAck, 1) > 0) {  // Discard XBee port buffer since it might have junk in it
-		}
 
 	}
-
-	printf("got ACK, handshake complete!\n");
 
 	return 1;	
-
-}
-
-/* testMessage(char *message, int length) - Test the message checksum */
-
-int testMessage(unsigned char *message, int length) {
-
-	unsigned int checksum = 0x00;
-	int x;
-
-	for(x = 0 ; x < length ; x++) {
-
-		checksum = checksum ^ (unsigned int)message[x];
-
-	}
-
-	if(checksum == 0x00) {
-
-		return 1;  // Checksum passed!
-
-	} else {
-
-		return -1;
-
-	}
 
 }
 
@@ -843,3 +791,121 @@ char *fgetsNoNewline(char *s, int n, FILE *stream) {
 	}
 
 }
+
+/* checkMessages() - Check for and handle any incoming messages */
+
+void checkMessages() {
+
+  int x;
+  unsigned char testByte;
+  if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
+
+    if(!gotMsgBegin) { // We're waiting for a message begin marker, so check for one
+
+	if(testByte == MSG_BEGIN) {  // Found a message begin marker
+
+		inMsg[0] = testByte;
+		gotMsgBegin = true;
+
+	} // Discard useless byte
+
+    } else if(!gotMsgType) {  // We're waiting for a message type marker, grab this one
+
+	inMsg[1] = testByte;
+	gotMsgType = true;
+	readMsgBytes = 2;
+	if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
+
+		msgWaitingBytes = MSG_SIZE_SYNC - 2;  // Subtract 2 since we already read two bytes off the buffer
+		
+	} else if(testByte == MSG_TYPE_CTRL) {
+
+		msgWaitingBytes = MSG_SIZE_CTRL - 2;
+
+	} else if(testByte == MSG_TYPE_PPZ) {
+
+		msgWaitingBytes = MSG_SIZE_PPZ - 2;
+
+	} else if(testByte == MSG_TYPE_CFG) {
+
+		msgWaitingBytes = MSG_SIZE_CFG - 2;
+	
+	} else { // Not a valid message type?  Ignore this garbage
+
+		gotMsgBegin = false;
+		gotMsgType = false;
+		msgWaitingBytes = 1;
+		readMsgBytes = 0;
+
+	}
+
+    } else { // We have our msgBegin and msgType markers, read the rest of the message into our buffer and handle it
+
+	inMsg[readMsgBytes] = testByte;
+	readMsgBytes++;
+
+	if(readMsgBytes > msgWaitingBytes) { // Have we finished reading the entire message?
+	
+		gotMsgBegin = false;  // Get ready to read our next message
+		gotMsgType = false;
+		msgWaitingBytes = 1;
+		readMsgBytes = 0;
+
+		if(testMessage(inMsg, msgWaitingBytes + 2)) {  // Test the message checksum
+
+			processMessage(inMsg, msgWaitingBytes + 2); // Execute or process the message
+
+		}
+
+	}
+
+
+    }
+
+  }
+
+}
+
+/* testMessage(message, length) - Test if the last byte checksum is good */
+
+boolean testMessage(unsigned char *message, int length) {
+
+	unsigned int checksum = 0x00;
+	int x;
+
+	for(x = 0 ; x < length ; x++) {
+
+		checksum = checksum ^ (unsigned int)message[x];
+
+	}
+
+	if(checksum == 0x00) {
+
+		return 1;  // Checksum passed!
+
+	} else {
+
+		return 0;
+
+	}
+
+}
+
+/* processMessage(message, length) - Do whatever the message tells us to do */
+
+void processMessage(unsigned char *message, int length) {
+
+	unsigned char msgType = message[1];
+	unsigned char msgSync[MSG_SIZE_SYNC];
+
+	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
+
+		 handShook = 1;
+
+	} else if(msgType == MSG_TYPE_CTRL) { // We shouldn't get this from the Arduino
+	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
+	} else if(msgType == MSG_TYPE_CFG) { // This either
+	}
+
+}
+
