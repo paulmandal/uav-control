@@ -56,7 +56,7 @@ Adruino:
 #define MSG_SIZE_CTRL 14      // Length of control update messages
 #define MSG_SIZE_SYNC 14      // Length of sync messages
 #define MSG_SIZE_PPZ  64      // Length of message from PPZ
-#define MSG_SZE_CFG   64      // Length of configuration message
+#define MSG_SIZE_CFG  64      // Length of configuration message
 #define MSG_BEGIN     0xFF    // Begin of control message indicator byte
 #define MSG_TYPE_CTRL 0x01    // Control update message type indicator
 #define MSG_TYPE_CFG  0x02    // Configuration update
