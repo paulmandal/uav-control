@@ -45,7 +45,7 @@
 #define PPM_SYNC_PULSE (PPM_FREQUENCY - (SERVO_COUNT * (((PPM_MAX_PULSE + PPM_MIN_PULSE) / 2) + PPM_HIGH_PULSE))) // Duration of sync pulse
 
 #define STATUS_LED_PIN 0
-#define STATUS_INTERVAL_SIGNAL_LOST 250 // Toggle every 250ms
+#define STATUS_INTERVAL_SIGNAL_LOST 100 // Toggle every 250ms
 #define STATUS_INTERVAL_OK 1000         // Toggle every 1s
 
 #define NAVLIGHT_PIN 12                 // Navigation light pin
@@ -222,7 +222,6 @@ void updateNavigationLights() {
 void checkMessages() {
 
   int x, msgSize;
-  boolean syncMsg = false;
   unsigned int checksum;
   unsigned char inMsg[128]; // Serial buffer is only 128 bytes anyway
   unsigned char testByte;
