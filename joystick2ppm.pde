@@ -83,7 +83,6 @@ void updateNavigationLights();
 void checkMessages();
 void checkSignal();
 void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh);
-void readSerialMessage(unsigned char *buffer, int length);
 
 /* Setup function */
 
@@ -228,7 +227,8 @@ void checkMessages() {
   unsigned char testByte;
   unsigned char msgType;
 
-  if(Serial.available() > 1) {         // Need at very least the MSG_BEGIN and MSG_TYPE characters (2 bytes)
+  if(Serial.available() > MSG_SIZE_SYNC) {         // Need at very least the MSG_BEGIN and MSG_TYPE characters (2 bytes)
+  // Nah that is messed up..
  
     testByte = Serial.read();            // Read the first byte in the buffer
     if(testByte == MSG_BEGIN) {
@@ -258,7 +258,14 @@ void checkMessages() {
 
 	}
 
-	readSerialMessage(inMsg, msgSize);  // Read the acutal message into our buffer
+        // We're using either 38400 or 115200 bps for our comms here, so, 38400 / 8 = 4800 bytes/s, or 14400byte/s.
+        // That means on the low end we should receive a byte every 1/4800 seconds, or less than 1ms per byte.
+	if(Serial.available() >= (msgSize - 2)) {  // Wait for it or time out if bytes don't come in a reasonable amount of time, subtract 2 since we've stripped off two bytes
+          for(x = 2 ; x < msgSize ; x++) {  // Don't overwrite the msgBegin or msgType bytes
+
+	    inMsg[x] = Serial.read();
+
+	  }
 
 	checksum = 0x00;
 
@@ -270,13 +277,16 @@ void checkMessages() {
 
 	if(checksum == 0x00) {  // Checksum was valid, this message should be legitimate
 
+		lastMsgTime = millis();  
+        	lostSignal = false;      
+
 		if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
 			 inMsg[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
 			 inMsg[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
 			 for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) { 
 
-				inMsg[x] = random(0, 255); // Fill all but the last character with random bytes
+				inMsg[x] = (unsigned char)random(0, 255); // Fill all but the last character with random bytes
 
 			 }
 			 checksum = 0x00;
@@ -286,10 +296,7 @@ void checkMessages() {
 
 			 }
 			 inMsg[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
-			 for(x = 0 ; x < MSG_SIZE_SYNC ; x++) {
-	
-				 Serial.print(inMsg[x]);         // Send the sync ACK
-			 }
+			 Serial.write(inMsg, MSG_SIZE_SYNC);     // Send the sync ACK
 		         ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
 		         currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
 		         statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
@@ -297,9 +304,6 @@ void checkMessages() {
 		         Serial.flush();                         // Flush the serial down the toilets
 
 		} else if(msgType == MSG_TYPE_CTRL) { // Handle updating the controls
-
-			lastMsgTime = millis();  // Don't count sync messages for lastMsgTime
-			lostSignal = false;      // lostSignal either
 
 			/* MSG structure - [BEGIN_MSG] [MSG_TYPE] [SERVOS] [BUTTONS] [CHECKSUM]
 		         * BEGIN_MSG - 1 byte  - 1 byte msg marker
@@ -329,7 +333,13 @@ void checkMessages() {
 		} else if(msgType == MSG_TYPE_CFG) { // Handle configuration message
 		}
 
-	}
+	} else {
+  
+          Serial.println("Failed checksum");
+  
+        }
+
+      }
 
     }
 
@@ -360,23 +370,6 @@ void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh
 
   unsigned int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
   channels[targetChannel] = mappedPulse; // Store new pulse width
-
-}
-
-/* readSerialMessage(buffer, length) - Read a message from the Serial buffer */
-
-void readSerialMessage(unsigned char *buffer, int length) {
-  
-        // We're using either 38400 or 115200 bps for our comms here, so, 38400 / 8 = 4800 bytes/s, or 14400byte/s.
-        // That means on the low end we should receive a byte every 1/4800 seconds, or less than 1ms per byte.
-	int x;
-        unsigned long startTime = millis();
-	while(Serial.available() < length && (millis() - startTime < length)) {}  // Wait for it or time out if bytes don't come in a reasonable amount of time
-	for(x = 2 ; x < length ; x++) {  // Don't overwrite the msgBegin or msgType bytes
-
-		buffer[x] = Serial.read();
-
-	}
 
 }
 
