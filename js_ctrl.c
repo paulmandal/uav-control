@@ -401,14 +401,10 @@ int sendHandshake(int xbeePort) {
 
 	handshakeMsg[MSG_SIZE_SYNC - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
 
-	while(!handShook) {
-
-		printf(".");
-		fflush(stdout);
-		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
-		usleep(20000);                                           // Give 20ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
-
-	}
+	printf(".");
+	fflush(stdout);
+	writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
+	usleep(20000);                                           // Give 20ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
 
 	return 1;	
 
@@ -416,7 +412,7 @@ int sendHandshake(int xbeePort) {
 
 /* setupTimer() - set up pulse timer */
 void setupTimer() {
-
+ 
 	struct sigaction sa;
 	struct itimerval timer;
 	
@@ -797,7 +793,7 @@ void checkMessages() {
   if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
 
     if(!gotMsgBegin) { // We're waiting for a message begin marker, so check for one
-
+	
 	if(testByte == MSG_BEGIN) {  // Found a message begin marker
 
 		inMsg[0] = testByte;
@@ -812,23 +808,23 @@ void checkMessages() {
 	readMsgBytes = 2;
 	if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
 
-		msgWaitingBytes = MSG_SIZE_SYNC - 2;  // Subtract 2 since we already read two bytes off the buffer
+		msgWaitingBytes = MSG_SIZE_SYNC - 1;  // Subtract 2 since we already read two bytes off the buffer
 		
 	} else if(testByte == MSG_TYPE_CTRL) {
 
-		msgWaitingBytes = MSG_SIZE_CTRL - 2;
+		msgWaitingBytes = MSG_SIZE_CTRL - 1;
 
 	} else if(testByte == MSG_TYPE_PPZ) {
 
-		msgWaitingBytes = MSG_SIZE_PPZ - 2;
+		msgWaitingBytes = MSG_SIZE_PPZ - 1;
 
 	} else if(testByte == MSG_TYPE_CFG) {
 
-		msgWaitingBytes = MSG_SIZE_CFG - 2;
+		msgWaitingBytes = MSG_SIZE_CFG - 1;
 	
 	} else { // Not a valid message type?  Ignore this garbage
 
-		gotMsgBegin = 0;
+		gotMsgBegin = 0;  // Get ready for our next message
 		gotMsgType = 0;
 		msgWaitingBytes = 1;
 		readMsgBytes = 0;
@@ -841,11 +837,6 @@ void checkMessages() {
 	readMsgBytes++;
 
 	if(readMsgBytes > msgWaitingBytes) { // Have we finished reading the entire message?
-	
-		gotMsgBegin = 0;  // Get ready to read our next message
-		gotMsgType = 0;
-		msgWaitingBytes = 1;
-		readMsgBytes = 0;
 
 		if(testMessage(inMsg, msgWaitingBytes + 2)) {  // Test the message checksum
 
@@ -853,8 +844,13 @@ void checkMessages() {
 
 		}
 
-	}
+		gotMsgBegin = 0;  // Get ready to read our next message
+		gotMsgType = 0;
+		msgWaitingBytes = 1;
+		readMsgBytes = 0;
 
+
+	}
 
     }
 
