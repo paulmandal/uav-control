@@ -69,8 +69,13 @@ boolean statusLEDState = false;          // Status LED state
 
 volatile byte currentChannel = 0;        // The channel being pulsed
 enum ppmStates { ppmOFF, ppmHIGH, ppmLOW };
-enum ppmStates ppmState = ppmOFF;           // PPM status
-unsigned int channels[SERVO_COUNT];  // Servo channels
+enum ppmStates ppmState = ppmOFF;        // PPM status
+unsigned int channels[SERVO_COUNT];      // Servo channels
+
+unsigned char inMsg[128];    // Incoming message buffer
+int msgWaitingBytes = 1;     // Message waiting byte count
+boolean gotMsgBegin = false; // Mark whether or not we're currently reading a message
+boolean gotMsgType = false;  // Mark whether we have a message type
 
 /* Function prototypes */
 
@@ -81,6 +86,8 @@ void initOutputs();
 void updateStatusLED();
 void updateNavigationLights();
 void checkMessages();
+boolean testMessage(unsigned char *message, int length);
+void processMessage(unsigned char *message, int length);
 void checkSignal();
 void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh);
 
@@ -222,128 +229,74 @@ void updateNavigationLights() {
 void checkMessages() {
 
   int x, msgSize;
-  unsigned int checksum;
-  unsigned char inMsg[128]; // Serial buffer is only 128 bytes anyway
   unsigned char testByte;
-  unsigned char msgType;
+  if(Serial.available() >= msgWaitingBytes) {  // All of our bytes are here (either this is 0 or a message size), so process them
 
-  if(Serial.available() > MSG_SIZE_SYNC) {         // Need at very least the MSG_BEGIN and MSG_TYPE characters (2 bytes)
-  // Nah that is messed up..
- 
-    testByte = Serial.read();            // Read the first byte in the buffer
-    if(testByte == MSG_BEGIN) {
+    if(!gotMsgBegin) { // We're waiting for a message begin marker, so check for one
 
-	inMsg[0] = testByte;           // Store the test byte
-	msgType = Serial.read();       // Grab the msgType indicator byte
-	inMsg[1] = msgType;	       // Store the msgType byte
-        if(msgType == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
+	testByte = Serial.read();
+	if(testByte == MSG_BEGIN) {  // Found a message begin marker
+
+		inMsg[0] = testByte;
+		gotMsgBegin = true;
+
+	} // Discard useless byte
+
+    } else if(!gotMsgType) {  // We're waiting for a message type marker, grab this one
+
+	testByte = Serial.read();
+	inMsg[1] = testByte;
+	gotMsgType = true;
+	if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
 
 		msgSize = MSG_SIZE_SYNC;
+		msgWaitingBytes = MSG_SIZE_SYNC - 2;  // Subtract 2 since we already read two bytes off the buffer
 		
-	} else if(msgType == MSG_TYPE_CTRL) {
+	} else if(testByte == MSG_TYPE_CTRL) {
 
 		msgSize = MSG_SIZE_CTRL;
+		msgWaitingBytes = MSG_SIZE_CTRL - 2;
 
-	} else if(msgType == MSG_TYPE_PPZ) {
+	} else if(testByte == MSG_TYPE_PPZ) {
 
 		msgSize = MSG_SIZE_PPZ;
+		msgWaitingBytes = MSG_SIZE_PPZ - 2;
 
-	} else if(msgType == MSG_TYPE_CFG) {
-		
+	} else if(testByte == MSG_TYPE_CFG) {
+
 		msgSize = MSG_SIZE_CFG;
+		msgWaitingBytes = MSG_SIZE_CFG - 2;
 	
 	} else { // Not a valid message type?  Ignore this garbage
 
-		msgSize = 0;
+		gotMsgBegin = false;
+		gotMsgType = false;
+		msgWaitingBytes = 1;
 
 	}
 
-        // We're using either 38400 or 115200 bps for our comms here, so, 38400 / 8 = 4800 bytes/s, or 14400byte/s.
-        // That means on the low end we should receive a byte every 1/4800 seconds, or less than 1ms per byte.
-	if(Serial.available() >= (msgSize - 2)) {  // Wait for it or time out if bytes don't come in a reasonable amount of time, subtract 2 since we've stripped off two bytes
-          for(x = 2 ; x < msgSize ; x++) {  // Don't overwrite the msgBegin or msgType bytes
+    } else { // We have our msgBegin and msgType markers, read the rest of the message into our buffer and handle it
 
-	    inMsg[x] = Serial.read();
+	for(x = 2 ; x < msgSize ; x++) {  // Don't overwrite the msgBegin or msgType bytes
 
-	  }
-
-	checksum = 0x00;
-
-	for(x = 0 ; x < msgSize ; x++) {
-
-        	checksum = checksum ^ (unsigned int)inMsg[x];  // Test the message against its checksum
+	    inMsg[x] = Serial.read();  // Read the rest of the message into our buffer
 
 	}
 
-	if(checksum == 0x00) {  // Checksum was valid, this message should be legitimate
+	gotMsgBegin = false;
+	gotMsgType = false;
+	msgWaitingBytes = 1;
+
+	if(testMessage(inMsg, msgSize)) {  // Test the message checksum
 
 		lastMsgTime = millis();  
-        	lostSignal = false;      
+        	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
 
-		if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
+		processMessage(inMsg, msgSize); // Execute or process the message
 
-			 inMsg[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
-			 inMsg[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
-			 for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) { 
-
-				inMsg[x] = (unsigned char)random(0, 255); // Fill all but the last character with random bytes
-
-			 }
-			 checksum = 0x00;
-			 for(x = 0 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
-
-				checksum = checksum ^ (unsigned int)inMsg[x];  // Generate our checksum for the sync msg
-
-			 }
-			 inMsg[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
-			 Serial.write(inMsg, MSG_SIZE_SYNC);     // Send the sync ACK
-		         ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
-		         currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
-		         statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
-		         delay(20);                              // 20ms for client to receive ACK before flushing buffer
-		         Serial.flush();                         // Flush the serial down the toilets
-
-		} else if(msgType == MSG_TYPE_CTRL) { // Handle updating the controls
-
-			/* MSG structure - [BEGIN_MSG] [MSG_TYPE] [SERVOS] [BUTTONS] [CHECKSUM]
-		         * BEGIN_MSG - 1 byte  - 1 byte msg marker
-			 * MSG_TYPE  - 1 byte  - 1 byte msg type marker
-		         * SERVOS    - 8 bytes - 1 byte per servo
-		         * BUTTONS   - 3 bytes - 2 bits per pin (allow more than on/off, e.g. 3-pos switch)
-		         * CHECKSUM  - 1 byte  - 1 byte XOR checksum
-		         *
-		         */
-          
-		        for(x = 0 ; x < SERVO_COUNT ; x++) {
-
-		          servos[x] = inMsg[x + 1]; // Set latest servo values from msg
-
-		        }
-
-		        for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
-
-		          buttons[(x * 4)] = (inMsg[x + 9] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
-		          buttons[(x * 4) + 1] = (inMsg[x + 9] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
-			  buttons[(x * 4) + 2] = (inMsg[x + 9] & B00001100) >> 2; // Same
-		          buttons[(x * 4) + 3] = (inMsg[x + 9] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
-
-		        }
-
-		} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
-		} else if(msgType == MSG_TYPE_CFG) { // Handle configuration message
-		}
-
-	} else {
-  
-          Serial.println("Failed checksum");
-  
-        }
-
-      }
+	}
 
     }
-
-    // Discard useless byte in testByte
 
   }
 
@@ -370,6 +323,91 @@ void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh
 
   unsigned int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
   channels[targetChannel] = mappedPulse; // Store new pulse width
+
+}
+
+/* testMessage(message, length) - Test if the last byte checksum is good */
+
+boolean testMessage(unsigned char *message, int length) {
+
+	unsigned int checksum = 0x00;
+	int x;
+
+	for(x = 0 ; x < length ; x++) {
+
+		checksum = checksum ^ (unsigned int)message[x];
+
+	}
+
+	if(checksum == 0x00) {
+
+		return true;  // Checksum passed!
+
+	} else {
+
+		return false;
+
+	}
+
+}
+
+/* processMessage(message, length) - Do whatever the message tells us to do */
+
+void processMessage(unsigned char *message, int length) {
+
+	unsigned char msgType = message[1];
+
+	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
+
+		 inMsg[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
+		 inMsg[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
+		 for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) { 
+
+			inMsg[x] = (unsigned char)random(0, 255); // Fill all but the last character with random bytes
+
+		 }
+		 checksum = 0x00;
+		 for(x = 0 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
+
+			checksum = checksum ^ (unsigned int)inMsg[x];  // Generate our checksum for the sync msg
+
+		 }
+		 inMsg[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
+		 Serial.write(inMsg, MSG_SIZE_SYNC);     // Send the sync ACK
+	         ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
+	         currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
+	         statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+	         delay(20);                              // 20ms for client to receive ACK before flushing buffer
+	         Serial.flush();                         // Flush the serial down the toilets
+
+	} else if(msgType == MSG_TYPE_CTRL) { // Handle updating the controls
+
+		/* MSG structure - [BEGIN_MSG] [MSG_TYPE] [SERVOS] [BUTTONS] [CHECKSUM]
+	         * BEGIN_MSG - 1 byte  - 1 byte msg marker
+		 * MSG_TYPE  - 1 byte  - 1 byte msg type marker
+	         * SERVOS    - 8 bytes - 1 byte per servo
+	         * BUTTONS   - 3 bytes - 2 bits per pin (allow more than on/off, e.g. 3-pos switch)
+	         * CHECKSUM  - 1 byte  - 1 byte XOR checksum
+	         */
+          
+	        for(x = 0 ; x < SERVO_COUNT ; x++) {
+
+	          servos[x] = inMsg[x + 1]; // Set latest servo values from msg
+
+	        }
+
+	        for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
+
+	          buttons[(x * 4)] = (inMsg[x + 9] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
+	          buttons[(x * 4) + 1] = (inMsg[x + 9] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
+		  buttons[(x * 4) + 2] = (inMsg[x + 9] & B00001100) >> 2; // Same
+	          buttons[(x * 4) + 3] = (inMsg[x + 9] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
+
+	        }
+
+	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
+	} else if(msgType == MSG_TYPE_CFG) { // Handle configuration message
+	}
 
 }
 
