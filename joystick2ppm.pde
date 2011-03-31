@@ -25,7 +25,7 @@
 #define MSG_SIZE_CTRL 14                      // Length of control update messages
 #define MSG_SIZE_SYNC 14		      // Length of sync messages
 #define MSG_SIZE_PPZ  64                      // Length of message from PPZ
-#define MSG_SZE_CFG   64		      // Length of configuration message
+#define MSG_SIZE_CFG  64		      // Length of configuration message
 #define MSG_BEGIN     0xFF                    // Begin of control message indicator byte
 #define MSG_TYPE_CTRL 0x01                    // Control update message type indicator
 #define MSG_TYPE_CFG  0x02		      // Configuration update
@@ -229,8 +229,9 @@ void checkMessages() {
   unsigned char msgType;
 
   if(Serial.available() > 1) {         // Need at very least the MSG_BEGIN and MSG_TYPE characters (2 bytes)
-  testByte = Serial.read();            // Read the first byte in the buffer
-  if(testByte == MSG_BEGIN) {
+ 
+    testByte = Serial.read();            // Read the first byte in the buffer
+    if(testByte == MSG_BEGIN) {
 
 	inMsg[0] = testByte;           // Store the test byte
 	msgType = Serial.read();       // Grab the msgType indicator byte
@@ -313,96 +314,9 @@ void checkMessages() {
 
 	}
 
-  }
-
-  // Discard useless byte in testByte
-
-  if(Serial.available() >= MSG_SIZE) {  // See if we have enough in the buffer for a message
-
-    if(Serial.peek() == MSG_BEGIN) {  // Check if the first buffered character is a start-of-message marker
-
-      checksum = 0x00;
-
-      for(x = 0 ; x < MSG_SIZE ; x++) {
-
-        inMsg[x] = Serial.read(); // Read the pending message into our buffer            
-
-      }
-
-      for(x = 0 ; x < MSG_SIZE ; x++) {
-
-        checksum = checksum ^ (unsigned int)inMsg[x];  // Test the message against its checksum
-
-      }
-
-      if(checksum == 0x00) {
-
-        // If the checksum is good, turn the lostSignal off and set this as the most recent received message time
-        lostSignal = false;
-        lastMsgTime = millis();
-
-        // Determine message type
-
-        syncMsg = false;
-
-        // If the first 2 characters are MSG_BEGIN, its a possible sync msg, test the rest except the checksum
-
-        if(inMsg[0] == MSG_BEGIN && inMsg[1] == MSG_BEGIN) {
-
-          syncMsg = true;
-          for(x = 2 ; x < (MSG_SIZE - 1) ; x++) {
-
-            if(inMsg[x] != MSG_BEGIN) {
-
-              syncMsg = false; // If any part of the message is not MSG_BEGIN we know it's not a sync msg
-
-            }
-
-          }
-
-        }
-
-        if(syncMsg) {
-
-         
-
-        } 
-        else {
-
-          /* MSG structure - [BEGIN_MSG] [SERVOS] [BUTTONS] [CHECKSUM]
-           * BEGIN_MSG - 1 byte  - 1 byte msg marker
-           * SERVOS    - 8 bytes - 1 byte per servo
-           * BUTTONS   - 3 bytes - 2 bits per pin (allow more than on/off, e.g. 3-pos switch)
-           * CHECKSUM  - 1 byte  - 1 byte XOR checksum
-           *
-           */
-          
-          for(x = 0 ; x < SERVO_COUNT ; x++) {
-
-            servos[x] = inMsg[x + 1]; // Set latest servo values from msg
-
-          }
-
-          for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
-
-            buttons[(x * 4)] = (inMsg[x + 9] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
-            buttons[(x * 4) + 1] = (inMsg[x + 9] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
-            buttons[(x * 4) + 2] = (inMsg[x + 9] & B00001100) >> 2; // Same
-            buttons[(x * 4) + 3] = (inMsg[x + 9] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
-
-          }
-
-        }
-
-      } 
-
-
-    } 
-    else {
-
-      Serial.read(); // Discard useless byte
-
     }
+
+    // Discard useless byte in testByte
 
   }
 
