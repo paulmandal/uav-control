@@ -19,7 +19,7 @@
 /* This is the defining moment of the file */
 
 #define VERSION_MAJOR 2     // Major version #
-#define VERSION_MINOR 0     // Minor #
+#define VERSION_MINOR 1     // Minor #
 #define VERSION_MOD   0     // Mod #
 
 #define MSG_SIZE_CTRL 14                      // Length of control update messages
@@ -228,7 +228,7 @@ void updateNavigationLights() {
 
 void checkMessages() {
 
-  int x, msgSize;
+  int x;
   unsigned char testByte;
   if(Serial.available() >= msgWaitingBytes) {  // All of our bytes are here (either this is 0 or a message size), so process them
 
@@ -249,22 +249,18 @@ void checkMessages() {
 	gotMsgType = true;
 	if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
 
-		msgSize = MSG_SIZE_SYNC;
 		msgWaitingBytes = MSG_SIZE_SYNC - 2;  // Subtract 2 since we already read two bytes off the buffer
 		
 	} else if(testByte == MSG_TYPE_CTRL) {
 
-		msgSize = MSG_SIZE_CTRL;
 		msgWaitingBytes = MSG_SIZE_CTRL - 2;
 
 	} else if(testByte == MSG_TYPE_PPZ) {
 
-		msgSize = MSG_SIZE_PPZ;
 		msgWaitingBytes = MSG_SIZE_PPZ - 2;
 
 	} else if(testByte == MSG_TYPE_CFG) {
 
-		msgSize = MSG_SIZE_CFG;
 		msgWaitingBytes = MSG_SIZE_CFG - 2;
 	
 	} else { // Not a valid message type?  Ignore this garbage
@@ -277,9 +273,9 @@ void checkMessages() {
 
     } else { // We have our msgBegin and msgType markers, read the rest of the message into our buffer and handle it
 
-	for(x = 2 ; x < msgSize ; x++) {  // Don't overwrite the msgBegin or msgType bytes
+	for(x = 0 ; x < msgWaitingBytes ; x++) {  // Don't overwrite the msgBegin or msgType bytes
 
-	    inMsg[x] = Serial.read();  // Read the rest of the message into our buffer
+	    inMsg[x + 2] = Serial.read();  // Read the rest of the message into our buffer
 
 	}
 
@@ -287,12 +283,12 @@ void checkMessages() {
 	gotMsgType = false;
 	msgWaitingBytes = 1;
 
-	if(testMessage(inMsg, msgSize)) {  // Test the message checksum
+	if(testMessage(inMsg, msgWaitingBytes + 2)) {  // Test the message checksum
 
 		lastMsgTime = millis();  
         	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
 
-		processMessage(inMsg, msgSize); // Execute or process the message
+		processMessage(inMsg, msgWaitingBytes + 2); // Execute or process the message
 
 	}
 
@@ -356,24 +352,25 @@ boolean testMessage(unsigned char *message, int length) {
 void processMessage(unsigned char *message, int length) {
 
 	unsigned char msgType = message[1];
+	unsigned char msgSync[MSG_SIZE_SYNC];
 
 	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
-		 inMsg[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
-		 inMsg[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
+		 msgSync[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
+		 msgSync[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
 		 for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) { 
 
-			inMsg[x] = (unsigned char)random(0, 255); // Fill all but the last character with random bytes
+			msgSync[x] = (unsigned char)random(0, 255); // Fill all but the last character with random bytes
 
 		 }
 		 checksum = 0x00;
 		 for(x = 0 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
 
-			checksum = checksum ^ (unsigned int)inMsg[x];  // Generate our checksum for the sync msg
+			checksum = checksum ^ (unsigned int)msgSync[x];  // Generate our checksum for the sync msg
 
 		 }
-		 inMsg[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
-		 Serial.write(inMsg, MSG_SIZE_SYNC);     // Send the sync ACK
+		 msgSync[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
+		 Serial.write(msgSync, MSG_SIZE_SYNC);     // Send the sync ACK
 	         ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
 	         currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
 	         statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
