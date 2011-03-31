@@ -45,7 +45,7 @@
 #define PPM_SYNC_PULSE (PPM_FREQUENCY - (SERVO_COUNT * (((PPM_MAX_PULSE + PPM_MIN_PULSE) / 2) + PPM_HIGH_PULSE))) // Duration of sync pulse
 
 #define STATUS_LED_PIN 0
-#define STATUS_INTERVAL_SIGNAL_LOST 100 // Toggle every 250ms
+#define STATUS_INTERVAL_SIGNAL_LOST 100 // Toggle every 100ms
 #define STATUS_INTERVAL_OK 1000         // Toggle every 1s
 
 #define NAVLIGHT_PIN 12                 // Navigation light pin
@@ -89,11 +89,12 @@ void readSerialMessage(unsigned char *buffer, int length);
 
 void setup() {
 
-  initControlState();   // Initialise control state
-  initOutputs();        // Initialise outputs
-  initPPM();            // Enable PPM 
-  initTimer();          // Turn on Timer
-  Serial.begin(38400);  // Open XBee/GCS Serial
+  randomSeed(analogRead(0)); // Seed our random number gen with an unconnected pins static
+  initControlState();        // Initialise control state
+  initOutputs();             // Initialise outputs
+  initPPM();                 // Enable PPM 
+  initTimer();               // Turn on Timer
+  Serial.begin(38400);       // Open XBee/GCS Serial
   Serial.flush();
 
 }
@@ -269,19 +270,36 @@ void checkMessages() {
 
 	if(checksum == 0x00) {  // Checksum was valid, this message should be legitimate
 
-		lostSignal = false;
-		lastMsgTime = millis();
-
 		if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
-			 Serial.println("ACK");                  // send ACK for sync msg
-		         ppmState = ppmLOW;                      // turn ppm LOW (since the signal is probably off)
-		         currentChannel = SERVO_COUNT;           // set our currentChannel to the last channel
-		         statusLEDInterval = STATUS_INTERVAL_OK; // set our status LED interval to OK
+			 inMsg[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
+			 inMsg[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
+			 for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) { 
+
+				inMsg[x] = random(0, 255); // Fill all but the last character with random bytes
+
+			 }
+			 checksum = 0x00;
+			 for(x = 0 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
+
+				checksum = checksum ^ (unsigned int)inMsg[x];  // Generate our checksum for the sync msg
+
+			 }
+			 inMsg[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
+			 for(x = 0 ; x < MSG_SIZE_SYNC ; x++) {
+	
+				 Serial.print(inMsg[x]);         // Send the sync ACK
+			 }
+		         ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
+		         currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
+		         statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
 		         delay(20);                              // 20ms for client to receive ACK before flushing buffer
 		         Serial.flush();                         // Flush the serial down the toilets
 
 		} else if(msgType == MSG_TYPE_CTRL) { // Handle updating the controls
+
+			lastMsgTime = millis();  // Don't count sync messages for lastMsgTime
+			lostSignal = false;      // lostSignal either
 
 			/* MSG structure - [BEGIN_MSG] [MSG_TYPE] [SERVOS] [BUTTONS] [CHECKSUM]
 		         * BEGIN_MSG - 1 byte  - 1 byte msg marker
