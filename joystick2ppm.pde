@@ -230,7 +230,7 @@ void checkMessages() {
 
   int x;
   unsigned char testByte;
-  if(Serial.available() >= msgWaitingBytes) {  // All of our bytes are here (either this is 0 or a message size), so process them
+  if(Serial.available() >= msgWaitingBytes) {  // All of our bytes are here (either this is 1 or a message size), so process them
 
     if(!gotMsgBegin) { // We're waiting for a message begin marker, so check for one
 
@@ -265,7 +265,7 @@ void checkMessages() {
 	
 	} else { // Not a valid message type?  Ignore this garbage
 
-		gotMsgBegin = false;
+		gotMsgBegin = false;  // Set ready for next message
 		gotMsgType = false;
 		msgWaitingBytes = 1;
 
@@ -279,10 +279,6 @@ void checkMessages() {
 
 	}
 
-	gotMsgBegin = false;
-	gotMsgType = false;
-	msgWaitingBytes = 1;
-
 	if(testMessage(inMsg, msgWaitingBytes + 2)) {  // Test the message checksum
 
 		lastMsgTime = millis();  
@@ -291,6 +287,10 @@ void checkMessages() {
 		processMessage(inMsg, msgWaitingBytes + 2); // Execute or process the message
 
 	}
+
+	gotMsgBegin = false;  // Set ready for next message
+	gotMsgType = false;  
+	msgWaitingBytes = 1;
 
     }
 
@@ -331,7 +331,7 @@ boolean testMessage(unsigned char *message, int length) {
 
 	for(x = 0 ; x < length ; x++) {
 
-		checksum = checksum ^ (unsigned int)message[x];
+                checksum = checksum ^ (unsigned int)message[x];
 
 	}
 
@@ -351,8 +351,10 @@ boolean testMessage(unsigned char *message, int length) {
 
 void processMessage(unsigned char *message, int length) {
 
+        int x;
 	unsigned char msgType = message[1];
 	unsigned char msgSync[MSG_SIZE_SYNC];
+        unsigned int checksum;
 
 	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
@@ -389,16 +391,16 @@ void processMessage(unsigned char *message, int length) {
           
 	        for(x = 0 ; x < SERVO_COUNT ; x++) {
 
-	          servos[x] = inMsg[x + 1]; // Set latest servo values from msg
+	          servos[x] = message[x + 2]; // Set latest servo values from msg
 
 	        }
 
 	        for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
 
-	          buttons[(x * 4)] = (inMsg[x + 9] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
-	          buttons[(x * 4) + 1] = (inMsg[x + 9] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
-		  buttons[(x * 4) + 2] = (inMsg[x + 9] & B00001100) >> 2; // Same
-	          buttons[(x * 4) + 3] = (inMsg[x + 9] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
+	          buttons[(x * 4)] = (message[x + 10] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
+	          buttons[(x * 4) + 1] = (message[x + 10] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
+		  buttons[(x * 4) + 2] = (message[x + 10] & B00001100) >> 2; // Same
+	          buttons[(x * 4) + 3] = (message[x + 10] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
 
 	        }
 
