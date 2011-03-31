@@ -331,7 +331,7 @@ boolean testMessage(unsigned char *message, int length) {
 
 	for(x = 0 ; x < length ; x++) {
 
-                checksum = checksum ^ (unsigned int)message[x];
+                checksum = checksum ^ (unsigned int)message[x];  // Test this message against its checksum (last byte)
 
 	}
 
