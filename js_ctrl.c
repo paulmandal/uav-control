@@ -39,6 +39,7 @@ Adruino:
 #include <stdlib.h>
 #include <stdint.h>
 #include <termios.h>
+#include <time.h>
 
 #include <linux/input.h>
 #include <linux/joystick.h>
@@ -193,6 +194,8 @@ int main (int argc, char **argv)
 
 	printf("Starting js_crl version %d.%d.%d...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Print version information
 
+	srand(time(NULL));
+	
 	if(readConfig(&xbeePortFile, &ppzPortFile, &joystickPortFile, &joystickEventFile) < 0) { // Read our config into our config vars
 
 		perror("js_ctrl"); // Error reading config file
@@ -362,7 +365,7 @@ int doHandshake(int xbeePort) {
 	handshakeMsg[1] = MSG_TYPE_SYNC;
 	for(i = 2 ; i < (MSG_SIZE_CTRL - 1) ; i++) {
 
-		handshakeMsg[i] = MSG_BEGIN;  // Build the handshake msg, it is MSG_BEGIN + MSG_TYPE_SYNC + MSG_BEGIN(until end) + checksum
+		handshakeMsg[i] = rand() % 255;  // Build the handshake msg, it is MSG_BEGIN + MSG_TYPE_SYNC + random characters + checksum
 		
 	}
 
