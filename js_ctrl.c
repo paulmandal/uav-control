@@ -382,9 +382,6 @@ int sendHandshake(int xbeePort) {
 
 	unsigned char handshakeMsg[MSG_SIZE_SYNC];
 	unsigned int checksum;
-	unsigned char handshakeAck[MSG_SIZE_SYNC];
-	unsigned char testChar;
-	unsigned char msgType = 0x00;
 	int i;
 
 	handshakeMsg[0] = MSG_BEGIN;
@@ -796,7 +793,6 @@ char *fgetsNoNewline(char *s, int n, FILE *stream) {
 
 void checkMessages() {
 
-  int x;
   unsigned char testByte;
   if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
 
@@ -805,14 +801,14 @@ void checkMessages() {
 	if(testByte == MSG_BEGIN) {  // Found a message begin marker
 
 		inMsg[0] = testByte;
-		gotMsgBegin = true;
+		gotMsgBegin = 1;
 
 	} // Discard useless byte
 
     } else if(!gotMsgType) {  // We're waiting for a message type marker, grab this one
 
 	inMsg[1] = testByte;
-	gotMsgType = true;
+	gotMsgType = 1;
 	readMsgBytes = 2;
 	if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
 
@@ -832,8 +828,8 @@ void checkMessages() {
 	
 	} else { // Not a valid message type?  Ignore this garbage
 
-		gotMsgBegin = false;
-		gotMsgType = false;
+		gotMsgBegin = 0;
+		gotMsgType = 0;
 		msgWaitingBytes = 1;
 		readMsgBytes = 0;
 
@@ -846,8 +842,8 @@ void checkMessages() {
 
 	if(readMsgBytes > msgWaitingBytes) { // Have we finished reading the entire message?
 	
-		gotMsgBegin = false;  // Get ready to read our next message
-		gotMsgType = false;
+		gotMsgBegin = 0;  // Get ready to read our next message
+		gotMsgType = 0;
 		msgWaitingBytes = 1;
 		readMsgBytes = 0;
 
@@ -868,7 +864,7 @@ void checkMessages() {
 
 /* testMessage(message, length) - Test if the last byte checksum is good */
 
-boolean testMessage(unsigned char *message, int length) {
+int testMessage(unsigned char *message, int length) {
 
 	unsigned int checksum = 0x00;
 	int x;
@@ -896,7 +892,6 @@ boolean testMessage(unsigned char *message, int length) {
 void processMessage(unsigned char *message, int length) {
 
 	unsigned char msgType = message[1];
-	unsigned char msgSync[MSG_SIZE_SYNC];
 
 	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
