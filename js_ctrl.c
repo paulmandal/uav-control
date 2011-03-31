@@ -16,9 +16,11 @@ TODO:
 - Relay PPZ -> UAV
 - Relay UAV -> PPZ
 - Force feedback on RSSI weak/loss
+- Better/propermessage handling, PPZ and Arduino
 
 Adruino:
 
+- Improve message handling, PPZ and JS
 - Handle digital pins/buttons
 - Handle 3-way switch (or servo it?)
 - Relay PPZ<->GCS
@@ -124,8 +126,8 @@ struct jsState {  // Store the axis and button states globally accessible
 
 struct afState { // Store the translated (servo + buttons) states, globally accessible
 
-	unsigned int servos[8];
-	unsigned int buttons[12];
+	unsigned int servos[SERVO_COUNT];
+	unsigned int buttons[BUTTON_COUNT];
 
 };
 
@@ -146,6 +148,7 @@ void printState();
 void initAirframe();
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
+int testMessage(unsigned char *message, int length);
 
 /* Global configuration info */
 
@@ -360,7 +363,7 @@ int doHandshake(int xbeePort) {
 	unsigned int checksum;
 	unsigned char handshakeAck[MSG_SIZE_SYNC];
 	unsigned char testChar;
-	unsigned char msgType;
+	unsigned char msgType = 0x00;
 	int i, handshook = 0;
 
 	handshakeMsg[0] = MSG_BEGIN;
@@ -389,33 +392,36 @@ int doHandshake(int xbeePort) {
 		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
 		usleep(20000);                                           // Give 20ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
 		
-		i = 0;
 		while(read(xbeePort, &testChar, 1) == 1) {
 
 			if(testChar == MSG_BEGIN) { // This is a begin message, let's check the type
 	
-				handshakeAck[i] = testChar; // Store the begin msg byte
-				i++;
+				handshakeAck[0] = testChar; // Store the begin msg byte
 		
-				while(read(xbeePort, &msgType, 1) != 1) {} // Try to read until we get something (DEBUG: may want to add a timer to break this
+				i = 0;
+				while(read(xbeePort, &msgType, 1) != 1 && i < 10) {
+
+					usleep(1000); // sleep 1ms, total 10ms for this character to arrive
+					i++;
+				} // Try to read until we get something (DEBUG: may want to add a timer to break this
 				if(msgType == MSG_TYPE_SYNC) {  // This is a sync msg
 
-					handshakeAck[i] = msgType;
-					i++;
+					handshakeAck[1] = msgType;
 					for(i = 2 ; i < MSG_SIZE_SYNC ; i++) {
 
-						read(xbeePort, &testChar, 1);
-						handshakeAck[i] = testChar;  // Read the rest of the sync msg into our buffer
+						if(read(xbeePort, &testChar, 1) == 1) {
+
+							handshakeAck[i] = testChar;  // Read the rest of the sync msg into our buffer
+
+						} else {
+
+							handshakeAck[i] = 0x00;  // Blank character 'coz there is nothing in the buffer
+
+						}
 
 					}
-
-					checksum = 0x00;
-					for(i = 0 ; i < MSG_SIZE_SYNC ; i++) {
-
-						checksum = checksum ^ (unsigned int)handshakeAck[i];  // Verify the checksum
-	
-					}
-					if(checksum == 0x00) {
+					
+					if(testMessage(handshakeAck, MSG_SIZE_SYNC) > 0) {
 
 						handshook = 1;  // Sync ack was valid
 
@@ -423,7 +429,7 @@ int doHandshake(int xbeePort) {
 					
 
 				}
-			}
+			} // Discard useless character
 
 		}
 
@@ -438,7 +444,32 @@ int doHandshake(int xbeePort) {
 
 }
 
-// setupTimer() - set up pulse timer
+/* testMessage(char *message, int length) - Test the message checksum */
+
+int testMessage(unsigned char *message, int length) {
+
+	unsigned int checksum = 0x00;
+	int x;
+
+	for(x = 0 ; x < length ; x++) {
+
+		checksum = checksum ^ (unsigned int)message[x];
+
+	}
+
+	if(checksum == 0x00) {
+
+		return 1;  // Checksum passed!
+
+	} else {
+
+		return -1;
+
+	}
+
+}
+
+/* setupTimer() - set up pulse timer */
 void setupTimer() {
 
 	struct sigaction sa;
