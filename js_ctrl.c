@@ -155,8 +155,8 @@ void processMessage(unsigned char *message, int length);
 /* Global configuration info */
 
 int toggleButtons[12] = {  // Set which buttons are toggleable
-1, 0, 0, 0, 
 0, 0, 0, 0, 
+1, 0, 0, 0, 
 0, 0, 0, 0
 };
 
@@ -869,7 +869,7 @@ int testMessage(unsigned char *message, int length) {
 
 	for(x = 0 ; x < length ; x++) {
 
-		checksum = checksum ^ (unsigned int)message[x];
+		checksum = checksum ^ (unsigned int)message[x];  // Test the message against its checksum (last byte)
 
 	}
 
