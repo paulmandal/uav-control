@@ -246,6 +246,8 @@ int main (int argc, char **argv)
 
 	printf("got ACK, handshake complete!\n");
 
+	while(read(xbeePort, &xbeeBuffer, 1) > 0) {} // Empty the Xbee buffer since it may have some junk left over from the handshake
+
 	setupTimer(); 	// Set up timer (every 20ms)
 
 	printf("Ready to read JS & relay for PPZ...\n");
