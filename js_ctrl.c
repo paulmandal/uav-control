@@ -240,8 +240,6 @@ int main (int argc, char **argv)
 			return 1;
 		}
 
-		checkMessages();
-
 	}
 
 	printf("got ACK, handshake complete!\n");
@@ -263,11 +261,7 @@ int main (int argc, char **argv)
 
 		//printState(); 	// print JS & AF state
 
-		while(read(xbeePort, &xbeeBuffer, 256) > 0) {  // check XBee port
-
-			printf("XBee: %s\n", xbeeBuffer);
-
-		}
+		checkMessages();
 
 		/*while(read(ppzPort, &ppzBuffer, 256) > 0) {  // check PPZ port
 
@@ -406,7 +400,13 @@ int sendHandshake(int xbeePort) {
 	printf(".");
 	fflush(stdout);
 	writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
-	usleep(20000);                                           // Give 20ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
+	usleep(10000);                                           // Give 10ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
+
+	for(i = 0 ; i < MSG_SIZE_SYNC ; i++) {
+
+		checkMessages();
+
+	}
 
 	return 1;	
 
