@@ -384,7 +384,7 @@ int doHandshake(int xbeePort) {
 
 	while(!handshook) {
 
-		//printf(".");
+		printf(".");
 		fflush(stdout);
 		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
 		usleep(20000);                                           // Give 20ms to respond
