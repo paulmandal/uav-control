@@ -285,8 +285,6 @@ void checkMessages() {
 
 	if(testMessage(inMsg, msgWaitingBytes + 2)) {  // Test the message checksum
 
-		lastMsgTime = millis();  
-        	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
 		commandsSinceLastAck++;
 
 		processMessage(inMsg, msgWaitingBytes + 2); // Execute or process the message
@@ -320,6 +318,16 @@ void checkSignal() {
     ppmState = ppmOFF;                               // Disable PPM
     statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
 
+  } else {
+    
+    if(ppmState == ppmOFF) {  // Restart PPM since it was off
+    
+    	ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
+	currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
+	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+    
+    }
+    
   }
 
 }
@@ -378,6 +386,9 @@ void processMessage(unsigned char *message, int length) {
 	         * BUTTONS   - 3 bytes - 2 bits per pin (allow more than on/off, e.g. 3-pos switch)
 	         * CHECKSUM  - 1 byte  - 1 byte XOR checksum
 	         */
+ 
+ 		lastMsgTime = millis(); // Only command messages count for this
+        	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
           
 	        for(x = 0 ; x < SERVO_COUNT ; x++) {
 
@@ -422,9 +433,6 @@ void sendAck() {
 	}
 	msgSync[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
 	Serial.write(msgSync, MSG_SIZE_SYNC);     // Send the sync ACK
-	ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
-	currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
-	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
         commandsSinceLastAck = 0;               // Set commandsSinceLastAck to 0
 	Serial.flush();                         // Flush the serial down the toilets
 
