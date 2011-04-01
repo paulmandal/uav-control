@@ -1,4 +1,3 @@
-slow
 /* js_ctrl.c - Paul Mandal (paul.mandal@gmail.com)
  *
  * Tracks joystick updates
@@ -920,9 +919,9 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 
 			if(_readMsgBytes >= _msgWaitingBytes) { // Have we finished reading the entire message?
 
-				if(testMessage(_inMsg, _msgWaitingBytes + 2)) {  // Test the message checksum
+				if(testMessage(_inMsg, _msgWaitingBytes)) {  // Test the message checksum
 
-					processMessage(_inMsg, _msgWaitingBytes + 2); // Execute or process the message
+					processMessage(_inMsg, _msgWaitingBytes); // Execute or process the message
 
 				} 
 
