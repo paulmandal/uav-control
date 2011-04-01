@@ -234,7 +234,7 @@ int main (int argc, char **argv)
 
 		if(!handShook) {
 
-			printf("Handshaking..\n");
+			printf("Handshaking..");
 
 			while(!handShook) {  // Handshaking loop
 
@@ -403,7 +403,7 @@ int doHandshake(int xbeePort) {
 
 	handshakeMsg[MSG_SIZE_SYNC - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
 
-	//printf(".");
+	printf(".");
 	fflush(stdout);
 	writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
 	usleep(20000);                                           // Give 20ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
@@ -790,7 +790,7 @@ char *fgetsNoNewline(char *s, int n, FILE *stream) {
 
 		if((newLine = strrchr(s, '\n')) != NULL) {
 
-			*newLine = '\0';
+			*newLine = '\0';  // Replace annoying newline character with null Terminator (T-800)
 
 		}
 		return s;
@@ -825,20 +825,16 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 
 	if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
 
-printf("BYT%2d: %2x", _readMsgBytes, testByte);
 		if(!_gotMsgBegin) { // We're waiting for a message begin marker, so check for one
 
 			if(testByte == MSG_BEGIN) {  // Found a message begin marker
-printf("  MB\n");
 				_inMsg[0] = testByte;
 				_gotMsgBegin = 1;
 			_readMsgBytes = 1;
-			} else {
-				printf("\njunked: %x\n", testByte);
-			}// Discard useless byte 
+			} // Discard useless byte 
 
 		} else if(!_gotMsgType) {  // We're waiting for a message type marker, grab this one
-printf("  MT\n");
+
 			_inMsg[1] = testByte;
 			_gotMsgType = 1;
 			_readMsgBytes = 2;
@@ -871,14 +867,12 @@ printf("  MT\n");
 
 			_inMsg[_readMsgBytes] = testByte;
 			_readMsgBytes++;
-printf("  %2d/%2d\n", _readMsgBytes, _msgWaitingBytes);
-			if(_readMsgBytes >= _msgWaitingBytes) { // Have we finished reading the entire message?
-printf("msg done!\n");
-				if(testMessage(_inMsg, _msgWaitingBytes + 2)) {  // Test the message checksum
-printf("msg chked\n");
-					processMessage(_inMsg, _msgWaitingBytes + 2); // Execute or process the message
 
-						printf("lack: %d\n",commandsSinceLastAck);
+			if(_readMsgBytes >= _msgWaitingBytes) { // Have we finished reading the entire message?
+
+				if(testMessage(_inMsg, _msgWaitingBytes + 2)) {  // Test the message checksum
+
+					processMessage(_inMsg, _msgWaitingBytes + 2); // Execute or process the message
 
 				} 
 
@@ -892,7 +886,6 @@ printf("msg chked\n");
 		}
 
 	} else {
-printf("ret0\n");
 		return 0;
 
 	}
@@ -920,13 +913,11 @@ int testMessage(unsigned char *message, int length) {
 	int x;
 
 	for(x = 0 ; x < length ; x++) {
-		printf("TST%2d: %x\n", x, (unsigned int)message[x]);
 
 		checksum = checksum ^ (unsigned int)message[x];  // Test the message against its checksum (last byte)
 
 	}
 
-	printf("CHK  : %x\n", checksum);
 	if(checksum == 0x00) {
 
 		return 1;  // Checksum passed!
@@ -961,6 +952,7 @@ void processMessage(unsigned char *message, int length) {
 
 void checkSignal() {
 
+	printf("csla: %d\n", commandsSinceLastAck);
 	if(commandsSinceLastAck > 100) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
 		handShook = 0;  // Turn off handshake so we can resync
