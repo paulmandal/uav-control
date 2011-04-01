@@ -66,6 +66,7 @@ Adruino:
 #define MSG_TYPE_PPZ  0x03    // Message from PPZ
 #define MSG_TYPE_SYNC 0xFE    // Sync message type indicator
 #define MSG_BUFFER_SIZE 128   // Message buffer size in bytes
+#define CMDS_PER_ACK  60      // Assume lost signal if we send this many commands without an ack
 
 #define NAME_LENGTH 128       // Length of Joystick name
 #define PPM_INTERVAL 20000    // Interval for state send message
@@ -952,10 +953,10 @@ void processMessage(unsigned char *message, int length) {
 
 void checkSignal() {
 
-	printf("csla: %d\n", commandsSinceLastAck);
-	if(commandsSinceLastAck > 100) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
+	if(commandsSinceLastAck > CMDS_PER_ACK) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
 		handShook = 0;  // Turn off handshake so we can resync
+		printf("Lost signal!  Attempting to resync.\n");
 
 	}
 
