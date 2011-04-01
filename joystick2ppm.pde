@@ -32,7 +32,7 @@
 #define MSG_TYPE_PPZ  0x03                    // Message from PPZ
 #define MSG_TYPE_SYNC 0xFE                    // Sync message type indicator
 #define MSG_BUFFER_SIZE 128 		      // Message buffer size in bytes
-#define CMDS_PER_ACK  50                      // Assume lost signal if we send this many commands without an ack
+#define CMDS_PER_ACK  50                      // Client will assume lost signal if we send this many commands without an ack
 #define MSG_INTERVAL  20                      // Control message update interval (20ms)
 #define LOST_MSG_THRESHOLD (MSG_INTERVAL * 3) // How long without legit msg before lostSignal gets set
 
@@ -425,6 +425,7 @@ void sendAck() {
 	ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
 	currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
 	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+        commandsSinceLastAck = 0;               // Set commandsSinceLastAck to 0
 	Serial.flush();                         // Flush the serial down the toilets
 
 }
