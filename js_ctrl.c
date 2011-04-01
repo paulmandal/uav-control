@@ -12,6 +12,8 @@
 
 TODO:
 
+- Move all values to config file
+- Write config msg updater
 - DPad -> servo control
 - Relay PPZ -> UAV
 - Relay UAV -> PPZ
@@ -20,6 +22,8 @@ TODO:
 
 Adruino:
 
+- Move all config values to EEPROM
+- Handle config updates via msg
 - Improve message handling, PPZ and JS
 - Handle digital pins/buttons
 - Handle 3-way switch (or servo it?)
