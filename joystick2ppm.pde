@@ -19,7 +19,7 @@
 /* This is the defining moment of the file */
 
 #define VERSION_MAJOR 2     // Major version #
-#define VERSION_MINOR 1     // Minor #
+#define VERSION_MINOR 2     // Minor #
 #define VERSION_MOD   0     // Mod #
 
 #define MSG_SIZE_CTRL 14                      // Length of control update messages
@@ -31,7 +31,9 @@
 #define MSG_TYPE_CFG  0x02		      // Configuration update
 #define MSG_TYPE_PPZ  0x03                    // Message from PPZ
 #define MSG_TYPE_SYNC 0xFE                    // Sync message type indicator
-#define MSG_INTERVAL 20                       // Control message update interval (20ms)
+#define MSG_BUFFER_SIZE 128 		      // Message buffer size in bytes
+#define CMDS_PER_ACK  50                      // Assume lost signal if we send this many commands without an ack
+#define MSG_INTERVAL  20                      // Control message update interval (20ms)
 #define LOST_MSG_THRESHOLD (MSG_INTERVAL * 3) // How long without legit msg before lostSignal gets set
 
 #define SERVO_COUNT 8       // # of servos
@@ -72,10 +74,12 @@ enum ppmStates { ppmOFF, ppmHIGH, ppmLOW };
 enum ppmStates ppmState = ppmOFF;        // PPM status
 unsigned int channels[SERVO_COUNT];      // Servo channels
 
-unsigned char inMsg[128];    // Incoming message buffer
+unsigned char inMsg[MSG_BUFFER_SIZE];    // Incoming message buffer
 int msgWaitingBytes = 1;     // Message waiting byte count
 boolean gotMsgBegin = false; // Mark whether or not we're currently reading a message
 boolean gotMsgType = false;  // Mark whether we have a message type
+
+int commandsSinceLastAck = 0;
 
 /* Function prototypes */
 
@@ -283,8 +287,15 @@ void checkMessages() {
 
 		lastMsgTime = millis();  
         	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
+		commandsSinceLastAck++;
 
 		processMessage(inMsg, msgWaitingBytes + 2); // Execute or process the message
+
+		if(commandsSinceLastAck > CMDS_PER_ACK) {
+
+			sendAck();  // Let the controller know we're alive
+
+		}
 
 	}
 
@@ -353,31 +364,10 @@ void processMessage(unsigned char *message, int length) {
 
         int x;
 	unsigned char msgType = message[1];
-	unsigned char msgSync[MSG_SIZE_SYNC];
-        unsigned int checksum;
 
 	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
-		 msgSync[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
-		 msgSync[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
-		 for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) { 
-
-			msgSync[x] = (unsigned char)random(0, 255); // Fill all but the last character with random bytes
-
-		 }
-		 checksum = 0x00;
-		 for(x = 0 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
-
-			checksum = checksum ^ (unsigned int)msgSync[x];  // Generate our checksum for the sync msg
-
-		 }
-		 msgSync[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
-		 Serial.write(msgSync, MSG_SIZE_SYNC);     // Send the sync ACK
-	         ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
-	         currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
-	         statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
-	         delay(20);                              // 20ms for client to receive ACK before flushing buffer
-	         Serial.flush();                         // Flush the serial down the toilets
+		 sendAck(); // Send ACK for the SYNC signal
 
 	} else if(msgType == MSG_TYPE_CTRL) { // Handle updating the controls
 
@@ -407,6 +397,35 @@ void processMessage(unsigned char *message, int length) {
 	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
 	} else if(msgType == MSG_TYPE_CFG) { // Handle configuration message
 	}
+
+}
+
+/* sendAck() - Send SYNC acknowledgement message */
+
+void sendAck() {
+
+	unsigned char msgSync[MSG_SIZE_SYNC];
+        unsigned int checksum;
+	int x;
+	msgSync[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
+	msgSync[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
+	for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) { 
+
+		msgSync[x] = (unsigned char)random(0, 255); // Fill all but the last character with random bytes
+
+	}
+	checksum = 0x00;
+	for(x = 0 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
+
+		checksum = checksum ^ (unsigned int)msgSync[x];  // Generate our checksum for the sync msg
+
+	}
+	msgSync[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
+	Serial.write(msgSync, MSG_SIZE_SYNC);     // Send the sync ACK
+	ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
+	currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
+	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+	Serial.flush();                         // Flush the serial down the toilets
 
 }
 
