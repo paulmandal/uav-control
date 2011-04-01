@@ -400,7 +400,7 @@ int sendHandshake(int xbeePort) {
 	printf(".");
 	fflush(stdout);
 	writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
-	usleep(10000);                                           // Give 10ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
+	usleep(20000);                                           // Give 20ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
 
 	for(i = 0 ; i < MSG_SIZE_SYNC ; i++) {
 
