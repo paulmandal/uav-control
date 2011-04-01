@@ -277,6 +277,7 @@ int main (int argc, char **argv)
 		usleep(1);
 	}
 
+	free(inMsg);
 	return 0;
 
 }
@@ -417,6 +418,8 @@ int doHandshake(int xbeePort) {
 
 		checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes);
 	}
+
+	free(inMsg);
 
 	return 1;	
 
@@ -906,6 +909,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 	*gotMsgBegin = _gotMsgBegin;                 
 	*gotMsgType = _gotMsgType;
 
+	free(_inMsg);
 	return 1;
 
 }
