@@ -823,15 +823,15 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 	int _gotMsgBegin = *gotMsgBegin;          // Mark whether or not we're currently reading a message
 	int _gotMsgType = *gotMsgType;            // Mark whether we have a message type
 
-	_inMsg = calloc(MSG_BUFFER_SIZE, sizeof(char));  // Allocate memory for our temporary buffer
-
-	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
-	
-		_inMsg[x] = *(*inMsg + x);
-
-	}
-
 	if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
+
+		_inMsg = calloc(MSG_BUFFER_SIZE, sizeof(char));  // Allocate memory for our temporary buffer
+
+		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
+	
+			_inMsg[x] = *(*inMsg + x);
+	
+		}
 
 		if(!_gotMsgBegin) { // We're waiting for a message begin marker, so check for one
 
@@ -893,24 +893,24 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 
 		}
 
+		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
+	
+			*(*inMsg+x) = _inMsg[x];		// Write message buffer back to its pointer
+
+		}
+
+		*msgWaitingBytes = _msgWaitingBytes; 	// Write values back to their pointars
+		*readMsgBytes = _readMsgBytes;	              
+		*gotMsgBegin = _gotMsgBegin;                 
+		*gotMsgType = _gotMsgType;
+
+		free(_inMsg);
+		return 1;
+
 	} else {
 		return 0;
 
 	}
-
-	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
-
-		*(*inMsg+x) = _inMsg[x];		// Write message buffer back to its pointer
-
-	}
-
-	*msgWaitingBytes = _msgWaitingBytes; 	// Write values back to their pointars
-	*readMsgBytes = _readMsgBytes;	              
-	*gotMsgBegin = _gotMsgBegin;                 
-	*gotMsgType = _gotMsgType;
-
-	free(_inMsg);
-	return 1;
 
 }
 
