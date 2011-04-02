@@ -79,7 +79,7 @@ boolean statusLEDState = false;          // Status LED state
 volatile byte currentChannel = 0;        // The channel being pulsed
 enum ppmStates { ppmOFF, ppmHIGH, ppmLOW };
 enum ppmStates ppmState = ppmOFF;        // PPM status
-unsigned int channels[SERVO_COUNT];      // Servo channels
+unsigned int pulses[SERVO_COUNT];        // PPM pulses
 
 unsigned char inMsg[MSG_BUFFER_SIZE];    // Incoming message buffer
 int msgWaitingBytes = 0;     // Message waiting byte count
@@ -179,7 +179,7 @@ void initPPM() {
 
   for (x = 0 ; x < SERVO_COUNT ; x++) {
     
-    channels[x] = midPPMPulse; // Set all PPM pulses to halfpulse
+    pulses[x] = midPPMPulse; // Set all PPM pulses to halfpulse
     
   }
 
@@ -427,7 +427,7 @@ void checkSignal() {
 void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh) {
 
   unsigned int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
-  channels[targetChannel] = mappedPulse; // Store new pulse width
+  pulses[targetChannel] = mappedPulse; // Store new pulse width
 
 }
 
@@ -597,7 +597,7 @@ ISR(TIMER1_COMPA_vect) {
       
     } else {
       
-      OCR1A = channels[currentChannel]; // Pin will stay low for channels[currentChannel] duration
+      OCR1A = pulses[currentChannel]; // Pin will stay low for pulses[currentChannel] duration
       currentChannel++;
     
     }
