@@ -114,7 +114,7 @@ void setup() {
   initOutputs();             // Initialise outputs
   initPPM();                 // Enable PPM 
   initTimer();               // Turn on Timer
-  Serial.begin(38400);       // Open XBee/GCS Serial
+  Serial.begin(115200);      // Open XBee/GCS Serial
   Serial.flush();
   #if DEBUG_LEVEL == 1
   Serial1.begin(115200);      // Open PPZ port as debug
