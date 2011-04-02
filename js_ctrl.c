@@ -57,6 +57,8 @@ Adruino:
 /* Definitions */
 
 #define DEBUG_LEVEL 1	      // Debug level - tells compiler to include or exclude debug message code
+			      // Debug level - 1 - Debug messaging/handshaking
+			      // Debug level - 2 - Debug joystick position info
 
 #define VERSION_MAJOR 2       // Version information, Major #
 #define VERSION_MINOR 2       // Minor #
@@ -75,7 +77,7 @@ Adruino:
 #define CMDS_PER_ACK  60      // Assume lost signal if we send this many commands without an ack
 
 #define NAME_LENGTH 128       // Length of Joystick name
-#define PPM_INTERVAL 20000    // Interval for state send message
+#define PPM_INTERVAL 100000    // Interval for state send message
 #define JS_DISCARD_UNDER 5000 // Discard joystick inputs under this level (joystick is very sensitive)
 #define CAM_PAN 4             // Camera Pan axis #
 #define CAM_TILT 5            // Camera Tilt axis #
@@ -149,7 +151,6 @@ void sendCtrlUpdate (int signum);
 void readJoystick(int jsPort, struct jsState *joystickState, int *prevLeftThrottle, int *prevRightThrottle);
 int openPort(char *portName, char *use);
 int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons);
-int doHandshake(int xbeePort, unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int *readMsgBytes, int *msgWaitingBytes);
 int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile, char **joystickEventFile);
 void setupTimer();
 void translateJStoAF(struct jsState joystickState);
@@ -200,7 +201,6 @@ int main (int argc, char **argv)
 	int readMsgBytes = 0;	              // How many bytes we've read so far
 	int gotMsgBegin = 0;                  // Mark whether or not we're currently reading a message
 	int gotMsgType = 0;                   // Mark whether we have a message type
-	char xbeeBuffer;
 
 	printf("Starting js_crl version %d.%d.%d...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Print version information
 
@@ -242,23 +242,17 @@ int main (int argc, char **argv)
 		if(!handShook) {
 
 			printf("Handshaking..");
-			#if DEBUG_LEVEL > 0	
+			#if DEBUG_LEVEL == 1	
 			printf("\n");
 			#endif
 
 			while(!handShook) {  // Handshaking loop
 
-				if(doHandshake(xbeePort, &inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes) < 0) { // Handshake with Arduino
-		
-					perror("js_ctrl");
-					printf("Handshake failed..\n");
-					return 1;
-				}
+				checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes);  // Check for new messages that might have handshake
 
 			}
 
 			printf("got ACK, handshake complete!\n");
-			while(read(xbeePort, &xbeeBuffer, 1) > 0) {} // Empty the Xbee buffer since it may have some junk left over from the handshake
 	
 		}
 
@@ -266,9 +260,16 @@ int main (int argc, char **argv)
 
 		translateJStoAF(joystickState);	// update Airframe model
 
-		//printState(joystickState, axes); 	// print JS & AF state
+		#if DEBUG_LEVEL == 2
+		printState(joystickState, axes); 	// print JS & AF state
+		#endif
+		
+		int x;
+		for(x = 0 ; x < 64 ; x++) {
 
-		checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes);  // Check for pending msg bytes
+			checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes);  // Check for pending msg bytes
+
+		}
 
 		checkSignal();  // Check if our signal is still good
 
@@ -379,47 +380,6 @@ int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons) {
 	}
 
 	return fd;  // Return joystick file descriptor
-
-}
-
-/* doHandshake() - handshake with receiver */
-
-int doHandshake(int xbeePort, unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int *readMsgBytes, int *msgWaitingBytes) {
-
-	unsigned char handshakeMsg[MSG_SIZE_SYNC];
-	unsigned int checksum;
-	int i;
-
-	handshakeMsg[0] = MSG_BEGIN;
-	handshakeMsg[1] = MSG_TYPE_SYNC;
-	for(i = 2 ; i < (MSG_SIZE_SYNC - 1) ; i++) {
-
-		handshakeMsg[i] = rand() % 255;  // Build the handshake msg, it is MSG_BEGIN + MSG_TYPE_SYNC + random characters + checksum
-		
-	}
-
-	checksum = 0x00;
-	for(i = 0 ; i < (MSG_SIZE_SYNC - 1) ; i++) {
-
-		checksum = checksum ^ (unsigned int)handshakeMsg[i];  // Build the checksum
-
-	}
-
-	handshakeMsg[MSG_SIZE_SYNC - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
-
-	#if DEBUG_LEVEL < 1
-	printf(".");
-	#endif
-	fflush(stdout);
-	writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
-	usleep(20000);                                           // Give 20ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
-
-	for(i = 0 ; i < MSG_SIZE_SYNC; i++) {
-
-		checkMessages(inMsg, gotMsgBegin, gotMsgType, readMsgBytes, msgWaitingBytes);
-	}
-
-	return 1;	
 
 }
 
@@ -622,12 +582,13 @@ void translateJStoAF(struct jsState joystickState) {
 /* sendCtrlUpdate() - Send latest control state to XBee port */
 
 void sendCtrlUpdate (int signum) {
+	
+	int x;
+	unsigned int checksum;
 
-	if(handShook) {	
+	if(handShook) {	// We're synced up, send a control update
 
-		int x;
 		unsigned char xbeeMsg[MSG_SIZE_CTRL];
-		unsigned int checksum;
 
 		xbeeMsg[0] = MSG_BEGIN;      // First character of xbeeMsg is MSG_BEGIN
 		xbeeMsg[1] = MSG_TYPE_CTRL;  // Message type = control
@@ -657,6 +618,32 @@ void sendCtrlUpdate (int signum) {
 		writePortMsg(xbeePort, "XBee", xbeeMsg, MSG_SIZE_CTRL);
 		commandsSinceLastAck++;
 	
+	} else {  // We aren't synced up, send sync msg
+
+		unsigned char handshakeMsg[MSG_SIZE_SYNC];
+		handshakeMsg[0] = MSG_BEGIN;
+		handshakeMsg[1] = MSG_TYPE_SYNC;
+		for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
+
+			handshakeMsg[x] = rand() % 254;  // Build the handshake msg, it is MSG_BEGIN + MSG_TYPE_SYNC + random characters + checksum
+		
+		}
+
+		checksum = 0x00;
+		for(x = 0 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
+
+			checksum = checksum ^ (unsigned int)handshakeMsg[x];  // Build the checksum
+
+		}
+
+		handshakeMsg[MSG_SIZE_SYNC - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
+
+		#if DEBUG_LEVEL == 0
+		printf(".");
+		#endif
+		fflush(stdout);
+		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
+
 	}
 }
 
@@ -825,8 +812,8 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 		int _gotMsgType = *gotMsgType;            // Mark whether we have a message type
 		_inMsg = calloc(MSG_BUFFER_SIZE, sizeof(char));  // Allocate memory for our temporary buffer
 
-		#if DEBUG_LEVEL > 0
-		printf("BYTE[%3d/%3d]: %2x", _readMsgBytes, _msgWaitingBytes, testByte); // Print out each received byte	
+		#if DEBUG_LEVEL == 1
+		printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x", _readMsgBytes, _msgWaitingBytes, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
 		#endif		
 
 		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
@@ -839,7 +826,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 
 			if(testByte == MSG_BEGIN) {  // Found a message begin marker
 
-				#if DEBUG_LEVEL > 0
+				#if DEBUG_LEVEL == 1
 				printf("  MESSAGE BEGIN\n"); // Print the byte type	
 				#endif		
 
@@ -847,7 +834,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 				_gotMsgBegin = 1;
 				_readMsgBytes = 1;
 			} 
-			#if DEBUG_LEVEL > 0
+			#if DEBUG_LEVEL == 1
 			else {// Discard useless byte 
 				
 				printf("  JUNK BYTE\n"); // Print the byte type
@@ -857,7 +844,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 
 		} else if(!_gotMsgType) {  // We're waiting for a message type marker, grab this one
 
-			#if DEBUG_LEVEL > 0
+			#if DEBUG_LEVEL == 1
 			printf("  MESSAGE TYPE"); // Print the byte type	
 			#endif		
 
@@ -867,14 +854,14 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 
 			if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
 
-				#if DEBUG_LEVEL > 0
+				#if DEBUG_LEVEL == 1
 				printf(" - SYNC\n"); // Print the message type	
 				#endif		
 				_msgWaitingBytes = MSG_SIZE_SYNC;  // Subtract 2 since we already read two bytes off the buffer
 
 			} else if(testByte == MSG_TYPE_CTRL) {
 
-				#if DEBUG_LEVEL > 0
+				#if DEBUG_LEVEL == 1
 				printf(" - CTRL\n"); // Print the message type		
 				#endif	
 
@@ -882,7 +869,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 
 			} else if(testByte == MSG_TYPE_PPZ) {
 
-				#if DEBUG_LEVEL > 0
+				#if DEBUG_LEVEL == 1
 				printf(" - PPZ\n"); // Print the message type	
 				#endif	
 
@@ -890,7 +877,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 
 			} else if(testByte == MSG_TYPE_CFG) {
 
-				#if DEBUG_LEVEL > 0
+				#if DEBUG_LEVEL == 1
 				printf(" - CFG\n"); // Print the message type		
 				#endif	
 
@@ -898,7 +885,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 	
 			} else { // Not a valid message type?  Ignore this garbage
 
-				#if DEBUG_LEVEL > 0
+				#if DEBUG_LEVEL == 1
 				printf(" - INVALID\n"); // Print the message type		
 				#endif	
 
@@ -910,7 +897,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 
 		} else { // We have our msgBegin and msgType markers, read the rest of the message into our buffer and handle it
 
-			#if DEBUG_LEVEL > 0
+			#if DEBUG_LEVEL == 1
 			printf("  DATA\n"); // Print the message type		
 			#endif	
 
@@ -949,6 +936,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 		return 1;
 
 	} else {
+
 		return 0;
 
 	}
@@ -963,7 +951,7 @@ int testMessage(unsigned char *message, int length) {
 	int x;
 
 
-	#if DEBUG_LEVEL > 0
+	#if DEBUG_LEVEL == 1
 	printf("CHKMSG[%2d]: ", length);
 	for(x = 0 ; x < length ; x++) {
 
@@ -979,7 +967,7 @@ int testMessage(unsigned char *message, int length) {
 
 	}
 
-	#if DEBUG_LEVEL > 0
+	#if DEBUG_LEVEL == 1
 	printf("%2x\n\n", checksum); // Print the checksum
 	#endif	
 
@@ -1021,6 +1009,9 @@ void checkSignal() {
 
 		handShook = 0;  // Turn off handshake so we can resync
 		printf("Lost signal!  Attempting to resync.\n");
+		#if DEBUG_LEVEL == 1
+		printf("Commands since last ACK: %3d\n", commandsSinceLastAck);
+		#endif
 
 	}
 
