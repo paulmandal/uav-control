@@ -18,6 +18,8 @@
 
 /* This is the defining moment of the file */
 
+#define DEBUG_LEVEL 1
+
 #define VERSION_MAJOR 2     // Major version #
 #define VERSION_MINOR 2     // Minor #
 #define VERSION_MOD   0     // Mod #
@@ -106,6 +108,10 @@ void setup() {
   initTimer();               // Turn on Timer
   Serial.begin(38400);       // Open XBee/GCS Serial
   Serial.flush();
+  #if DEBUG_LEVEL == 1
+  Serial1.begin(38400);      // Open PPZ port as debug
+  Serial1.println("Open for debugging mode..");
+  #endif
 
 }
 
@@ -241,34 +247,70 @@ void checkMessages() {
 	testByte = Serial.read();
 	if(testByte == MSG_BEGIN) {  // Found a message begin marker
 
+		#if DEBUG_LEVEL == 1
+		Serial1.print("BYTE[0/");
+		Serial1.print(msgWaitingBytes);
+		Serial1.print("]: ");
+		Serial1.print(testByte, HEX);
+		Serial1.println("  MSG BEGIN");
+		#endif
 		inMsg[0] = testByte;
 		gotMsgBegin = true;
 
 	} // Discard useless byte
+	#if DEBUG_LEVEL == 1	
+	Serial1.print("BYTE[0/");
+	Serial1.print(msgWaitingBytes);
+	Serial1.print("]: ");
+	Serial1.print(testByte, HEX);
+	Serial1.println("  JUNK BYTE");	
+	#endif
 
     } else if(!gotMsgType) {  // We're waiting for a message type marker, grab this one
 
+	#if DEBUG_LEVEL == 1
+	Serial1.print("BYTE[1/");
+	Serial1.print(msgWaitingBytes);
+	Serial1.print("]: ");
+	Serial1.print(testByte, HEX);
+	Serial1.print("  MSG TYPE");
+	#endif
 	testByte = Serial.read();
 	inMsg[1] = testByte;
 	gotMsgType = true;
 	if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
 
+		#if DEBUG_LEVEL == 1
+		Serial1.println("-SYNC");
+		#endif
 		msgWaitingBytes = MSG_SIZE_SYNC - 2;  // Subtract 2 since we already read two bytes off the buffer
 		
 	} else if(testByte == MSG_TYPE_CTRL) {
 
+		#if DEBUG_LEVEL == 1
+		Serial1.println("-CTRL");
+		#endif
 		msgWaitingBytes = MSG_SIZE_CTRL - 2;
 
 	} else if(testByte == MSG_TYPE_PPZ) {
 
+		#if DEBUG_LEVEL == 1
+		Serial1.println("-PPZ");
+		#endif
 		msgWaitingBytes = MSG_SIZE_PPZ - 2;
 
 	} else if(testByte == MSG_TYPE_CFG) {
 
+		#if DEBUG_LEVEL == 1
+		Serial1.println("-CFG");
+		#endif
 		msgWaitingBytes = MSG_SIZE_CFG - 2;
 	
 	} else { // Not a valid message type?  Ignore this garbage
 
+		#if DEBUG_LEVEL == 1
+		Serial1.println("-INVALID");
+		#endif
 		gotMsgBegin = false;  // Set ready for next message
 		gotMsgType = false;
 		msgWaitingBytes = 1;
@@ -279,7 +321,18 @@ void checkMessages() {
 
 	for(x = 0 ; x < msgWaitingBytes ; x++) {  // Don't overwrite the msgBegin or msgType bytes
 
-	    inMsg[x + 2] = Serial.read();  // Read the rest of the message into our buffer
+		inMsg[x + 2] = Serial.read();  // Read the rest of the message into our buffer
+
+		#if DEBUG_LEVEL == 1
+		Serial1.print("BYTE[");
+		Serial1.print(x);
+		Serial1.print("/");
+		Serial1.print(msgWaitingBytes);
+		Serial1.print("]: ");
+		Serial1.print(inMsg[x + 2], HEX);
+		Serial1.println("  MSG BEGIN");
+		#endif
+
 
 	}
 
@@ -348,11 +401,23 @@ boolean testMessage(unsigned char *message, int length) {
 	unsigned int checksum = 0x00;
 	int x;
 
+	#if DEBUG_LEVEL == 1
+	Serial1.print("CHKMSG: ");
+	#endif
+
 	for(x = 0 ; x < length ; x++) {
 
+		#if DEBUG_LEVEL == 1
+		Serial1.print((unsigned int)message[x], HEX);
+		Serial1.print(" ");
+		#endif
                 checksum = checksum ^ (unsigned int)message[x];  // Test this message against its checksum (last byte)
 
 	}
+	#if DEBUG_LEVEL == 1
+	Serial1.print("CHK: ");
+	Serial1.println(checksum, HEX);
+	#endif
 
 	if(checksum == 0x00) {
 
@@ -418,11 +483,16 @@ void sendAck() {
 	unsigned char msgSync[MSG_SIZE_SYNC];
         unsigned int checksum;
 	int x;
+
+	#if DEBUG_LEVEL == 1	
+	Serial1.println("Sending SYNC ACK");
+	#endif 
+
 	msgSync[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
 	msgSync[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
 	for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) { 
 
-		msgSync[x] = (unsigned char)random(0, 255); // Fill all but the last character with random bytes
+		msgSync[x] = (unsigned char)random(0, 254); // Fill all but the last character with random bytes
 
 	}
 	checksum = 0x00;
@@ -434,7 +504,6 @@ void sendAck() {
 	msgSync[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
 	Serial.write(msgSync, MSG_SIZE_SYNC);     // Send the sync ACK
         commandsSinceLastAck = 0;               // Set commandsSinceLastAck to 0
-	Serial.flush();                         // Flush the serial down the toilets
 
 }
 
