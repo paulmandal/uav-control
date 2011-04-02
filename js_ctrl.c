@@ -148,7 +148,7 @@ struct afState { // Store the translated (servo + buttons) states, globally acce
 
 int map(int value, int inRangeLow, int inRangeHigh, int outRangeLow, int outRangeHigh);
 void sendCtrlUpdate (int signum);
-void readJoystick(int jsPort, struct jsState *joystickState, int *prevLeftThrottle, int *prevRightThrottle);
+void readJoystick(int jsPort, struct jsState *_joystickState, int *_prevLeftThrottle, int *_prevRightThrottle);
 int openPort(char *portName, char *use);
 int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons);
 int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile, char **joystickEventFile);
@@ -158,7 +158,7 @@ void printState(struct jsState joystickState, int axes);
 void initAirframe();
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
-int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int *readMsgBytes, int *msgWaitingBytes);
+int checkMessages(unsigned char **_inMsg, int *_gotMsgBegin, int *_gotMsgType, int *_readMsgBytes, int *_msgWaitingBytes);
 int testMessage(unsigned char *message, int length);
 void checkSignal();
 void processMessage(unsigned char *message, int length);
@@ -406,14 +406,14 @@ void setupTimer() {
 
 /* readJoystick(jsPort, joystickState) - Read joystick state from jsPort, update joystickState */
 
-void readJoystick(int jsPort, struct jsState *joystickState, int *prevLeftThrottle, int *prevRightThrottle) {
+void readJoystick(int jsPort, struct jsState *_joystickState, int *_prevLeftThrottle, int *_prevRightThrottle) {
 
 	struct js_event js;
 	int jsValue;
 	int toggleButtons[12] = { TOGGLE_BUTTONS };
 	int buttonStateCount[12] = { BUTTON_STATE_COUNT };
-	struct jsState _joystickState;
-	_joystickState = *joystickState;
+	struct jsState joystickState;
+	joystickState = *_joystickState;
 
 	while(read(jsPort, &js, sizeof(struct js_event)) == sizeof(struct js_event)) {
 
@@ -424,7 +424,7 @@ void readJoystick(int jsPort, struct jsState *joystickState, int *prevLeftThrott
 
 					if(js.value == 1) { // If it is a toggle and this event is a button press, toggle the button
 
-						_joystickState.button[js.number] = !_joystickState.button[js.number];
+						joystickState.button[js.number] = !joystickState.button[js.number];
 
 					}
 				
@@ -432,13 +432,13 @@ void readJoystick(int jsPort, struct jsState *joystickState, int *prevLeftThrott
 
 					if(js.value == 1) {  // If it is a multi-state and this event is a button press, cycle through states
 
-						if(_joystickState.button[js.number] < buttonStateCount[js.number]) {
+						if(joystickState.button[js.number] < buttonStateCount[js.number]) {
 
-							_joystickState.button[js.number] = _joystickState.button[js.number] + 1;	
+							joystickState.button[js.number] = joystickState.button[js.number] + 1;	
 
 						} else {
 
-							_joystickState.button[js.number] = 0;  // Max state hit, zero out state
+							joystickState.button[js.number] = 0;  // Max state hit, zero out state
 
 						}
 
@@ -446,7 +446,7 @@ void readJoystick(int jsPort, struct jsState *joystickState, int *prevLeftThrott
 
 				} else {
 
-					_joystickState.button[js.number] = js.value;  // Normal button, switch to value from event
+					joystickState.button[js.number] = js.value;  // Normal button, switch to value from event
 
 				}
 
@@ -470,20 +470,20 @@ void readJoystick(int jsPort, struct jsState *joystickState, int *prevLeftThrott
 
 					if(jsValue > 0) {  // Check if the joystick is in the "up" or "down" section of the axis
 
-						if(jsValue > *prevLeftThrottle) {
+						if(jsValue > prevLeftThrottle) {
 
-							_joystickState.axis[js.number] = jsValue;  // Joystick is in the up section and has passed previous max throttles
-							*prevLeftThrottle = jsValue;
+							joystickState.axis[js.number] = jsValue;  // Joystick is in the up section and has passed previous max throttles
+							prevLeftThrottle = jsValue;
 
 						}
 
 					} else {
 
 						jsValue = jsValue + 32767;   // Since we inverted the axis, add the MAX_VAL to this
-						if(jsValue < *prevLeftThrottle) {  // Joystick is in the down section and has passed the previous min throttle
+						if(jsValue < prevLeftThrottle) {  // Joystick is in the down section and has passed the previous min throttle
 
-							_joystickState.axis[js.number] = jsValue;
-							*prevLeftThrottle = jsValue;
+							joystickState.axis[js.number] = jsValue;
+							prevLeftThrottle = jsValue;
 
 						}
 
@@ -491,7 +491,7 @@ void readJoystick(int jsPort, struct jsState *joystickState, int *prevLeftThrott
 					
 				} else {
 
-					_joystickState.axis[js.number] = jsValue;  // Regular axis, just store the current value
+					joystickState.axis[js.number] = jsValue;  // Regular axis, just store the current value
 
 				}
 				break;
@@ -500,7 +500,9 @@ void readJoystick(int jsPort, struct jsState *joystickState, int *prevLeftThrott
 
 		}
 
-		*joystickState = _joystickState;  // Save our mods to the pointer
+		*_joystickState = joystickState;  // Save our mods to the pointer
+		*_prevLeftThrottle = prevLeftThrottle;
+		*_prevRightThrottle = prevRightThrottle;
 
 }
 
@@ -616,6 +618,9 @@ void sendCtrlUpdate (int signum) {
 		xbeeMsg[MSG_SIZE_CTRL - 1] = (unsigned char)checksum & 0xFF; // Last byte is checksum
 
 		writePortMsg(xbeePort, "XBee", xbeeMsg, MSG_SIZE_CTRL);
+		#if DEBUG_LEVEL == 1
+		printf("CSLA: %3d/%3d\n", commandsSinceLastAck, CMDS_PER_ACK);
+		#endif
 		commandsSinceLastAck++;
 	
 	} else {  // We aren't synced up, send sync msg
@@ -798,31 +803,31 @@ char *fgetsNoNewline(char *s, int n, FILE *stream) {
 
 /* checkMessages() - Check for and handle any incoming messages */
 
-int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int *readMsgBytes, int *msgWaitingBytes) {
+int checkMessages(unsigned char **_inMsg, int *_gotMsgBegin, int *_gotMsgType, int *_readMsgBytes, int *_msgWaitingBytes) {
 
 	unsigned char testByte = 0x00;
 
 	if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
 
 		int x;
-		unsigned char *_inMsg;                    // Incoming message buffer
-		int _msgWaitingBytes = *msgWaitingBytes;  // Message waiting byte count
-		int _readMsgBytes = *readMsgBytes;	  // How many bytes we've read so far
-		int _gotMsgBegin = *gotMsgBegin;          // Mark whether or not we're currently reading a message
-		int _gotMsgType = *gotMsgType;            // Mark whether we have a message type
-		_inMsg = calloc(MSG_BUFFER_SIZE, sizeof(char));  // Allocate memory for our temporary buffer
+		unsigned char *inMsg;                     // Incoming message buffer
+		int msgWaitingBytes = *_msgWaitingBytes;  // Message waiting byte count
+		int readMsgBytes = *_readMsgBytes;	  // How many bytes we've read so far
+		int gotMsgBegin = *_gotMsgBegin;          // Mark whether or not we're currently reading a message
+		int gotMsgType = *_gotMsgType;            // Mark whether we have a message type
+		inMsg = calloc(MSG_BUFFER_SIZE, sizeof(char));  // Allocate memory for our temporary buffer
 
 		#if DEBUG_LEVEL == 1
-		printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x", _readMsgBytes, _msgWaitingBytes, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
+		printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x", readMsgBytes, msgWaitingBytes, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
 		#endif		
 
 		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
 	
-			_inMsg[x] = *(*inMsg + x);
+			inMsg[x] = *(*_inMsg + x);
 	
 		}
 
-		if(!_gotMsgBegin) { // We're waiting for a message begin marker, so check for one
+		if(!gotMsgBegin) { // We're waiting for a message begin marker, so check for one
 
 			if(testByte == MSG_BEGIN) {  // Found a message begin marker
 
@@ -830,9 +835,9 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 				printf("  MESSAGE BEGIN\n"); // Print the byte type	
 				#endif		
 
-				_inMsg[0] = testByte;
-				_gotMsgBegin = 1;
-				_readMsgBytes = 1;
+				inMsg[0] = testByte;
+				gotMsgBegin = 1;
+				readMsgBytes = 1;
 			} 
 			#if DEBUG_LEVEL == 1
 			else {// Discard useless byte 
@@ -842,22 +847,22 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 			}
 			#endif
 
-		} else if(!_gotMsgType) {  // We're waiting for a message type marker, grab this one
+		} else if(!gotMsgType) {  // We're waiting for a message type marker, grab this one
 
 			#if DEBUG_LEVEL == 1
 			printf("  MESSAGE TYPE"); // Print the byte type	
 			#endif		
 
-			_inMsg[1] = testByte;
-			_gotMsgType = 1;
-			_readMsgBytes = 2;						
+			inMsg[1] = testByte;
+			gotMsgType = 1;
+			readMsgBytes = 2;						
 
 			if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
 
 				#if DEBUG_LEVEL == 1
 				printf(" - SYNC\n"); // Print the message type	
 				#endif		
-				_msgWaitingBytes = MSG_SIZE_SYNC;  // Subtract 2 since we already read two bytes off the buffer
+				msgWaitingBytes = MSG_SIZE_SYNC;  // Subtract 2 since we already read two bytes off the buffer
 
 			} else if(testByte == MSG_TYPE_CTRL) {
 
@@ -865,7 +870,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 				printf(" - CTRL\n"); // Print the message type		
 				#endif	
 
-				_msgWaitingBytes = MSG_SIZE_CTRL;
+				msgWaitingBytes = MSG_SIZE_CTRL;
 
 			} else if(testByte == MSG_TYPE_PPZ) {
 
@@ -873,7 +878,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 				printf(" - PPZ\n"); // Print the message type	
 				#endif	
 
-				_msgWaitingBytes = MSG_SIZE_PPZ;
+				msgWaitingBytes = MSG_SIZE_PPZ;
 
 			} else if(testByte == MSG_TYPE_CFG) {
 
@@ -881,7 +886,7 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 				printf(" - CFG\n"); // Print the message type		
 				#endif	
 
-				_msgWaitingBytes = MSG_SIZE_CFG;
+				msgWaitingBytes = MSG_SIZE_CFG;
 	
 			} else { // Not a valid message type?  Ignore this garbage
 
@@ -889,10 +894,10 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 				printf(" - INVALID\n"); // Print the message type		
 				#endif	
 
-				_gotMsgBegin = 0;  // Get ready for our next message
-				_gotMsgType = 0;
-				_msgWaitingBytes = 1;
-				_readMsgBytes = 0;
+				gotMsgBegin = 0;  // Get ready for our next message
+				gotMsgType = 0;
+				msgWaitingBytes = 1;
+				readMsgBytes = 0;
 			}
 
 		} else { // We have our msgBegin and msgType markers, read the rest of the message into our buffer and handle it
@@ -901,21 +906,21 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 			printf("  DATA\n"); // Print the message type		
 			#endif	
 
-			_inMsg[_readMsgBytes] = testByte;
-			_readMsgBytes++;
+			inMsg[readMsgBytes] = testByte;
+			readMsgBytes++;
 
-			if(_readMsgBytes >= _msgWaitingBytes) { // Have we finished reading the entire message?
+			if(readMsgBytes >= msgWaitingBytes) { // Have we finished reading the entire message?
 
-				if(testMessage(_inMsg, _msgWaitingBytes)) {  // Test the message checksum
+				if(testMessage(inMsg, msgWaitingBytes)) {  // Test the message checksum
 
-					processMessage(_inMsg, _msgWaitingBytes); // Execute or process the message
+					processMessage(inMsg, msgWaitingBytes); // Execute or process the message
 
 				} 
 
-				_gotMsgBegin = 0;  // Get ready to read our next message
-				_gotMsgType = 0;
-				_msgWaitingBytes = 1;
-				_readMsgBytes = 0;
+				gotMsgBegin = 0;  // Get ready to read our next message
+				gotMsgType = 0;
+				msgWaitingBytes = 1;
+				readMsgBytes = 0;
 
 			}
 
@@ -923,16 +928,16 @@ int checkMessages(unsigned char **inMsg, int *gotMsgBegin, int *gotMsgType, int 
 
 		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
 	
-			*(*inMsg+x) = _inMsg[x];		// Write message buffer back to its pointer
+			*(*_inMsg+x) = inMsg[x];		// Write message buffer back to its pointer
 
 		}
 
-		*msgWaitingBytes = _msgWaitingBytes; 	// Write values back to their pointars
-		*readMsgBytes = _readMsgBytes;	              
-		*gotMsgBegin = _gotMsgBegin;                 
-		*gotMsgType = _gotMsgType;
+		*_msgWaitingBytes = msgWaitingBytes; 	// Write values back to their pointars
+		*_readMsgBytes = readMsgBytes;	              
+		*_gotMsgBegin = gotMsgBegin;                 
+		*_gotMsgType = gotMsgType;
 
-		free(_inMsg);
+		free(inMsg);
 		return 1;
 
 	} else {
@@ -949,7 +954,6 @@ int testMessage(unsigned char *message, int length) {
 
 	unsigned int checksum = 0x00;
 	int x;
-
 
 	#if DEBUG_LEVEL == 1
 	printf("CHKMSG[%2d]: ", length);
@@ -993,6 +997,9 @@ void processMessage(unsigned char *message, int length) {
 
 		handShook = 1;
 		commandsSinceLastAck = 0;
+		#if DEBUG_LEVEL == 1
+		printf("CSLA: %3d/%3d\n", commandsSinceLastAck, CMDS_PER_ACK);
+		#endif
 
 	} else if(msgType == MSG_TYPE_CTRL) { // We shouldn't get this from the Arduino
 	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
@@ -1010,7 +1017,7 @@ void checkSignal() {
 		handShook = 0;  // Turn off handshake so we can resync
 		printf("Lost signal!  Attempting to resync.\n");
 		#if DEBUG_LEVEL == 1
-		printf("Commands since last ACK: %3d\n", commandsSinceLastAck);
+		printf("CSLA: %3d\n", commandsSinceLastAck);
 		#endif
 
 	}
