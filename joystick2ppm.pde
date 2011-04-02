@@ -52,7 +52,7 @@
 #define PPM_MAX_PULSE 2000  // Max pulse length (2ms)
 #define PPM_HIGH_PULSE 200  // Delay between pulses (200us)
 #define PPM_FREQUENCY 20000 // Frequency of PPM frame (20ms)
-#define PPM_PULSES ((SERVO_COUNT * 2) + 3)  // How many pulses are there in the whole PPM (One 220us HIGH per servo, then 1ms-2ms LOW for servo pos, then 220us HIGH for pulse, then PPM_SYNC_PULSE LOW)
+#define PPM_PULSES ((SERVO_COUNT * 2) + 2)  // How many pulses are there in the whole PPM (One 220us HIGH per servo, then 1ms-2ms LOW for servo pos, then 220us HIGH for pulse, then PPM_SYNC_PULSE LOW)
 #define PPM_SYNC_PULSE (PPM_FREQUENCY - (SERVO_COUNT * (((PPM_MAX_PULSE + PPM_MIN_PULSE) / 2) + PPM_HIGH_PULSE))) // Duration of sync pulse
 
 #define STATUS_LED_PIN 0
