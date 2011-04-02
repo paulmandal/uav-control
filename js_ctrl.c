@@ -327,8 +327,8 @@ int openPort(char *portName, char *use) {
 	struct termios options;  // The port opened, set it up the port
 
 	tcgetattr(fd, &options);              // Get current settings
-	cfsetispeed(&options, B38400);        // Set input speed to 38400
-	cfsetospeed(&options, B38400);        // Set output speed to 38400
+	cfsetispeed(&options, B115200);        // Set input speed to 38400
+	cfsetospeed(&options, B115200);        // Set output speed to 38400
 	options.c_cflag |= (CLOCAL | CREAD);  // Set sum flags (CLOCAL & CREAD)
 	tcsetattr(fd, TCSANOW, &options);     // Set options
 
