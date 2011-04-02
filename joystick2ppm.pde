@@ -78,7 +78,7 @@ unsigned long lastStatusLEDTime = 0;     // Time of last status LED change
 unsigned long statusLEDInterval = 0;     // Current status LED toggle interval
 boolean statusLEDState = false;          // Status LED state
 
-volatile byte currentPulse = 0;        // The channel being pulsed
+volatile byte currentPulse = 0;        // The pulse being sent
 boolean  ppmON = false;
 unsigned int pulses[PPM_PULSES];        // PPM pulses
 
@@ -101,12 +101,12 @@ void checkMessages();
 boolean testMessage(unsigned char *message, int length);
 void processMessage(unsigned char *message, int length);
 void checkSignal();
-void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh);
+void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh);
 
 /* Setup function */
 
 void setup() {
-    
+
   delay(100);                // Wait 100ms since some of our timers use millis() and it starts at 0.  They expect more from it.  They're disappoint.
                              // This also gives PuTTY (using for diag on 2nd UART) time to open and connect
   randomSeed(analogRead(0)); // Seed our random number gen with an unconnected pins static
@@ -415,8 +415,12 @@ void checkSignal() {
         Serial1.println("Restarting PPM");
         #endif    
     	ppmON = true;                           // Turn ppm LOW (since the signal is probably off)
-	currentPulse = 0;                       // Set our currentPulse to the last channel
-        OCR1A = pulses[currentPulse];           // Set our current pulse length
+	currentPulse = 1;                       // Set our currentPulse to first servo pulse
+        OCR1A = 0;                              // Zero out OCR1A compare register
+        TCCR1A = B11000000;                     // CTC, set high on match
+        TCCR1B = B00001010;                     // CTC, 8 prescaler
+        TCCR1C = B10000000;                     // Force match, should set pin high, and OCR1A to the first high pulse
+        OCR1A = pulses[0];
         DDRD  |= B00100000;                     // Enable output on OC1A
         TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A
         TCCR1A = B01000011;                     // Fast PWM
@@ -429,12 +433,12 @@ void checkSignal() {
 
 }
 
-/* storePulse(targetChannel, us, inRangeLow, inRangeHigh) - map input values to PPM durations (min/max) and store pulse */
+/* storePulse(index, us, inRangeLow, inRangeHigh) - map input values to PPM durations (min/max) and store pulse */
 
-void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh) {
+void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
 
   unsigned int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
-  pulses[(targetChannel * 2) + 1] = mappedPulse; // Store new pulse width
+  pulses[(index * 2) + 1] = mappedPulse; // Store new pulse width
 
 }
 
@@ -535,7 +539,7 @@ void handleControlUpdate() {
   int x;
   storePulse(0, servos[0], 0, 254);  // Write ESC #1
   storePulse(1, servos[1], 0, 254);  // Write ESC #2
-  // Write all remaning servo channels
+  // Write all remaning servo pulses
   for(x = 2 ; x < SERVO_COUNT ; x++) {
 
     storePulse(x, servos[x], 0, 180);
