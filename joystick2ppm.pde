@@ -93,7 +93,6 @@ int commandsSinceLastAck = 0;
 /* Function prototypes */
 
 void initControlState();
-void initTimer();
 void initPPM();
 void initOutputs();
 void updateStatusLED();
@@ -113,8 +112,7 @@ void setup() {
   randomSeed(analogRead(0)); // Seed our random number gen with an unconnected pins static
   initControlState();        // Initialise control state
   initOutputs();             // Initialise outputs
-  initPPM();                 // Enable PPM 
-  initTimer();               // Turn on Timer
+  initPPM();                 // Set default PPM pulses
   Serial.begin(115200);      // Open XBee/GCS Serial
   Serial.flush();
   #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 2 || DEBUG_LEVEL == 4
@@ -184,7 +182,7 @@ void initPPM() {
     pulses[(x * 2) + 1] = midPPMPulse; // Set all PPM pulses to halfpulse
     
   }
-  pulses[PPM_PULSES - 1] = PPM_SYNC_PULSE;
+  pulses[PPM_PULSES - 1] = PPM_SYNC_PULSE; // Sync pulse is before 0 length pulse
 
   #if DEBUG_LEVEL == 4
   for(x = 0 ; x < PPM_PULSES ; x++) {
@@ -198,19 +196,6 @@ void initPPM() {
   #endif
   currentPulse = 0; // init currentPulse
 
-}
-
-/* initTimer() - Set up ATmega timers */
-
-void initTimer() {
-
-  // Timer1, used to make PPM waveform real nice like
-
-  TIMSK1 = B00000010; // Interrupt on compare match with OCR1A
-  TCCR1A = B00000011; // Fast PWM
-  TCCR1B = B00011010; // Fast PWM, plus 8 prescaler, 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)
-  DDRD  |= B00100000; // Enable output on this pin
-  
 }
 
 /* initOutputs() - Set output pins up */
@@ -411,7 +396,10 @@ void checkSignal() {
       #endif
       lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
       ppmON = false;                                   // Disable PPM
-      TCCR1A &= B00001111;                             // Disable output pins
+      DDRD  &= B11011111;                              // Disable output on OC1A
+      TIMSK1 = B00000000;                              // Disable interrupt on compare match
+      TCCR1A = B00000000;                              // Disable fast PWM
+      TCCR1B = B00000000;                              // Disable fast PWM, clock, and prescaler
       statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
       #if DEBUG_LEVEL == 3
       digitalWrite(DEBUG_PIN1, HIGH);
@@ -427,8 +415,12 @@ void checkSignal() {
         Serial1.println("Restarting PPM");
         #endif    
     	ppmON = true;                           // Turn ppm LOW (since the signal is probably off)
-        TCCR1A |= B01000000;                    // Enable output pin
 	currentPulse = 0;                       // Set our currentPulse to the last channel
+        OCR1A = pulses[currentPulse];           // Set our current pulse length
+        DDRD  |= B00100000;                     // Enable output on OC1A
+        TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A
+        TCCR1A = B01000011;                     // Fast PWM
+        TCCR1B = B00011010;                     // Fast PWM, plus 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)
 	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
     
     }
@@ -608,9 +600,9 @@ void sendAck() {
 
 ISR(TIMER1_COMPA_vect) {
 
-  OCR1A = pulses[currentPulse];
-  currentPulse++;
-  if(currentPulse > PPM_PULSES) {
+  OCR1A = pulses[currentPulse];    // Set OCR1A compare register to our next pulse
+  currentPulse++;                  // Increment the pulse counter
+  if(currentPulse >= PPM_PULSES) { // If the pulse counter is too high reset it
     
     currentPulse = 0;
     
