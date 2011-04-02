@@ -18,14 +18,14 @@
 
 /* This is the defining moment of the file */
 
-#define DEBUG_LEVEL 3   // 1 - Messaging debugging
+#define DEBUG_LEVEL 1   // 1 - Messaging debugging
                         // 2 - Servo / pin output
                         // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
 #define DEBUG_PIN1  4   // Pin for debug signaling   
                      
 
 #define VERSION_MAJOR 2     // Major version #
-#define VERSION_MINOR 4     // Minor #
+#define VERSION_MINOR 5     // Minor #
 #define VERSION_MOD   0     // Mod #
 
 #define MSG_SIZE_CTRL 14                      // Length of control update messages
@@ -117,7 +117,7 @@ void setup() {
   Serial.begin(38400);       // Open XBee/GCS Serial
   Serial.flush();
   #if DEBUG_LEVEL == 1
-  Serial1.begin(38400);      // Open PPZ port as debug
+  Serial1.begin(115200);      // Open PPZ port as debug
   Serial1.print("joystick2ppm version ");
   Serial1.print(VERSION_MAJOR);
   Serial1.print(".");
