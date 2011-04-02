@@ -199,10 +199,10 @@ void initTimer() {
   
   // Timer2, used to update PPM pulses based on servo states
 
-  TIMSK2 = B00000010; // Interrupt on compare match with OCR2A
-  TCCR2A = B00000010; // CTC mode
-  TCCR2B = B00000111; // 1024 prescaler because 8bits does not store a lot
-  OCR2A  = 104; // changed: ~75Hz == (16MHz / (2 * 1024 * 104) ---- ~100hz == (16MHz / (2 * 1024 * 78))
+  //TIMSK2 = B00000010; // Interrupt on compare match with OCR2A
+  //TCCR2A = B00000010; // CTC mode
+  //TCCR2B = B00000111; // 1024 prescaler because 8bits does not store a lot
+  //OCR2A  = 104; // changed: ~75Hz == (16MHz / (2 * 1024 * 104) ---- ~100hz == (16MHz / (2 * 1024 * 78))
   
 }
 
