@@ -61,7 +61,7 @@ Adruino:
 			      // Debug level - 2 - Debug joystick position info
 
 #define VERSION_MAJOR 2       // Version information, Major #
-#define VERSION_MINOR 2       // Minor #
+#define VERSION_MINOR 3       // Minor #
 #define VERSION_MOD   0       // Mod #
 
 #define MSG_SIZE_CTRL 14      // Length of control update messages
@@ -77,7 +77,7 @@ Adruino:
 #define CMDS_PER_ACK  60      // Assume lost signal if we send this many commands without an ack
 
 #define NAME_LENGTH 128       // Length of Joystick name
-#define PPM_INTERVAL 100000    // Interval for state send message
+#define PPM_INTERVAL 20000    // Interval for state send message
 #define JS_DISCARD_UNDER 5000 // Discard joystick inputs under this level (joystick is very sensitive)
 #define CAM_PAN 4             // Camera Pan axis #
 #define CAM_TILT 5            // Camera Tilt axis #
@@ -281,6 +281,11 @@ int main (int argc, char **argv)
 		}*/
 
 		usleep(1);
+		if(commandsSinceLastAck > 10) {  // DEBUG
+
+			return 0;
+
+		}
 	}
 
 	free(inMsg);
@@ -413,6 +418,11 @@ void readJoystick(int jsPort, struct jsState *_joystickState, int *_prevLeftThro
 	int toggleButtons[12] = { TOGGLE_BUTTONS };
 	int buttonStateCount[12] = { BUTTON_STATE_COUNT };
 	struct jsState joystickState;
+	int prevLeftThrottle;
+	int prevRightThrottle;
+
+	prevLeftThrottle = *_prevLeftThrottle;
+	prevRightThrottle = *_prevRightThrottle;
 	joystickState = *_joystickState;
 
 	while(read(jsPort, &js, sizeof(struct js_event)) == sizeof(struct js_event)) {
@@ -838,6 +848,7 @@ int checkMessages(unsigned char **_inMsg, int *_gotMsgBegin, int *_gotMsgType, i
 				inMsg[0] = testByte;
 				gotMsgBegin = 1;
 				readMsgBytes = 1;
+				msgWaitingBytes = 2;
 			} 
 			#if DEBUG_LEVEL == 1
 			else {// Discard useless byte 
@@ -862,7 +873,7 @@ int checkMessages(unsigned char **_inMsg, int *_gotMsgBegin, int *_gotMsgType, i
 				#if DEBUG_LEVEL == 1
 				printf(" - SYNC\n"); // Print the message type	
 				#endif		
-				msgWaitingBytes = MSG_SIZE_SYNC;  // Subtract 2 since we already read two bytes off the buffer
+				msgWaitingBytes = MSG_SIZE_SYNC;  
 
 			} else if(testByte == MSG_TYPE_CTRL) {
 
