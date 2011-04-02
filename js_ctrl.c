@@ -56,7 +56,7 @@ Adruino:
 
 /* Definitions */
 
-#define DEBUG_LEVEL 1	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 0	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Debug messaging/handshaking
 			      // Debug level - 2 - Debug joystick position info
 
