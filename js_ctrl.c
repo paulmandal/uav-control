@@ -61,7 +61,7 @@ Adruino:
 			      // Debug level - 2 - Debug joystick position info
 
 #define VERSION_MAJOR 2       // Version information, Major #
-#define VERSION_MINOR 3       // Minor #
+#define VERSION_MINOR 4       // Minor #
 #define VERSION_MOD   0       // Mod #
 
 #define MSG_SIZE_CTRL 14      // Length of control update messages
@@ -281,7 +281,7 @@ int main (int argc, char **argv)
 		}*/
 
 		usleep(1);
-		if(commandsSinceLastAck > 10) {  // DEBUG
+		if(commandsSinceLastAck > 10000) {  // DEBUG
 
 			return 0;
 
