@@ -57,7 +57,7 @@
 #define STATUS_INTERVAL_SIGNAL_LOST 100 // Toggle every 100ms
 #define STATUS_INTERVAL_OK 1000         // Toggle every 1s
 
-#define NAVLIGHT_PIN 12                 // Navigation light pin
+#define NAVLIGHT_PIN 18                 // Navigation light pin
 #define NAVLIGHT_INTERVAL 1000          // Toggle every 1s
 /* Various varibles to hold state info */
 
@@ -194,8 +194,9 @@ void initTimer() {
   // Timer1, used to make PPM waveform real nice like
 
   TIMSK1 = B00000010; // Interrupt on compare match with OCR1A
-  TCCR1A = B00000011; // Fast PWM
+  TCCR1A = B01000011; // Fast PWM - Toggle pin on compare match
   TCCR1B = B00011010; // Fast PWM, plus 8 prescaler, 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)
+  DDRD  |= B00100000; // Enable output on this pin
   
 }
 
@@ -360,8 +361,6 @@ void checkMessages() {
 	if(testMessage(inMsg, msgWaitingBytes)) {  // Test the message checksum
 
 		commandsSinceLastAck++;
- 		lastMsgTime = millis(); // Only command messages count for this
-        	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
 
 		processMessage(inMsg, msgWaitingBytes); // Execute or process the message
 
@@ -489,6 +488,8 @@ void processMessage(unsigned char *message, int length) {
 
 	} else if(msgType == MSG_TYPE_CTRL) { // Handle updating the controls
 
+ 		lastMsgTime = millis(); // Only command messages count for this
+        	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
 		/* MSG structure - [BEGIN_MSG] [MSG_TYPE] [SERVOS] [BUTTONS] [CHECKSUM]
 	         * BEGIN_MSG - 1 byte  - 1 byte msg marker
 		 * MSG_TYPE  - 1 byte  - 1 byte msg type marker
