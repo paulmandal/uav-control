@@ -18,15 +18,16 @@
 
 /* This is the defining moment of the file */
 
-#define DEBUG_LEVEL 3   // 1 - Messaging debugging
+#define DEBUG_LEVEL 4   // 1 - Messaging debugging
                         // 2 - Servo / pin output
                         // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
-                        // 4 - PPM Debugging (output PPM info)
+                        // 4 - PPM registers
+                        // 5 - PPM pulse values
 #define DEBUG_PIN1  4   // Pin for debug signaling   
                      
 
 #define VERSION_MAJOR 2     // Major version #
-#define VERSION_MINOR 5     // Minor #
+#define VERSION_MINOR 6     // Minor #
 #define VERSION_MOD   0     // Mod #
 
 #define MSG_SIZE_CTRL 14                      // Length of control update messages
@@ -75,7 +76,7 @@ boolean navlightState = false;           // Navigation light LED state
 boolean navlightEnabled = false;         // Enable/disable navigation lights
 
 unsigned long lastStatusLEDTime = 0;     // Time of last status LED change
-unsigned long statusLEDInterval = 0;     // Current status LED toggle interval
+unsigned long statusLEDInterval = STATUS_INTERVAL_OK; // Current status LED toggle interval
 boolean statusLEDState = false;          // Status LED state
 
 volatile byte currentPulse = 0;        // The pulse being sent
@@ -115,16 +116,19 @@ void setup() {
   initPPM();                 // Set default PPM pulses
   Serial.begin(115200);      // Open XBee/GCS Serial
   Serial.flush();
-  #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 2 || DEBUG_LEVEL == 4
+  #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 2 || DEBUG_LEVEL == 4 || DEBUG_LEVEL == 5
   Serial1.begin(115200);      // Open PPZ port as debug
-  Serial1.print("joystick2ppm version ");
+  Serial1.println();  // Give us a little space in the output terminal / monitor
+  Serial1.println();
+  Serial1.println();
+  Serial1.print("joystick2ppm version ");  // Output version info
   Serial1.print(VERSION_MAJOR);
   Serial1.print(".");
   Serial1.print(VERSION_MINOR);
   Serial1.print(".");
   Serial1.print(VERSION_MOD);
   Serial1.println("...");
-  Serial1.println("Open for debugging mode..");
+  Serial1.println("Open for debugging mode..");  // Let them know we're ready
   #endif
   
   #if DEBUG_LEVEL == 3
@@ -178,13 +182,13 @@ void initPPM() {
 
   for (x = 0 ; x < (SERVO_COUNT + 1) ; x++) {
     
-    pulses[x * 2] = PPM_HIGH_PULSE;
+    pulses[x * 2] = PPM_HIGH_PULSE + x;  // DEBUG
     pulses[(x * 2) + 1] = midPPMPulse; // Set all PPM pulses to halfpulse
     
   }
   pulses[PPM_PULSES - 1] = PPM_SYNC_PULSE; // Sync pulse is before 0 length pulse
 
-  #if DEBUG_LEVEL == 4
+  #if DEBUG_LEVEL == 5
   for(x = 0 ; x < PPM_PULSES ; x++) {
     
     Serial1.print("Pulse[");
@@ -413,16 +417,45 @@ void checkSignal() {
 
         #if DEBUG_LEVEL == 1
         Serial1.println("Restarting PPM");
-        #endif    
-    	ppmON = true;                           // Turn ppm LOW (since the signal is probably off)
-	currentPulse = 1;                       // Set our currentPulse to first servo pulse
-        OCR1A = 0;                              // Zero out OCR1A compare register
-        TCCR1A = B11000000;                     // CTC, set high on match
-        TCCR1B = B00001010;                     // CTC, 8 prescaler
-        TCCR1C = B10000000;                     // Force match, should set pin high, and OCR1A to the first high pulse
-        OCR1A = pulses[0];
+        #endif        
         DDRD  |= B00100000;                     // Enable output on OC1A
-        TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A
+        TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A        
+        #if DEBUG_LEVEL == 4
+        Serial1.print("OCR1A: ");
+        Serial1.print(OCR1A, DEC);
+        Serial1.println("  Incoming value to ppm->ON");
+        Serial1.print("currentPulse: ");
+        Serial1.println(currentPulse);
+        #endif        
+    	ppmON = true;                           // Turn ppm LOW (since the signal is probably off)
+	currentPulse = 1;                       // Set our currentPulse to first pulse
+        TCCR1A = B11000000;                     // CTC, set high on match
+        TCCR1B = B00001000;                     // CTC, clock disabled, see what happen
+        OCR1A  = 4040;//PPM_SYNC_PULSE;         // Set the compare register to whatever we like, the clock is off        
+        #if DEBUG_LEVEL == 4
+        Serial1.print("OCR1A: ");
+        Serial1.print(OCR1A, DEC);
+        Serial1.println(" OCR1A = 4040 by ppm->ON, currentPulse = 1 by ppm->ON");
+        Serial1.print("currentPulse: ");
+        Serial1.println(currentPulse);
+        #endif        
+        TCCR1C = B10000000;                     // Force match, should set pin high, and OCR1A to the first high pulse        
+        #if DEBUG_LEVEL == 4
+        Serial1.print("OCR1A: ");
+        Serial1.print(OCR1A, DEC);
+        Serial1.println(" OCR1A = 4040 - after FOC1A Force Match");
+        Serial1.print("currentPulse: ");
+        Serial1.println(currentPulse);
+        #endif             
+        OCR1A = pulses[0];
+        #if DEBUG_LEVEL == 4
+        Serial1.print("OCR1A: ");
+        Serial1.print(OCR1A, DEC);
+        Serial1.print(" OCR1A = pulses[0] == ");
+        Serial1.println(pulses[0]);
+        Serial1.print("currentPulse: ");
+        Serial1.println(currentPulse);
+        #endif        
         TCCR1A = B01000011;                     // Fast PWM
         TCCR1B = B00011010;                     // Fast PWM, plus 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)
 	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
@@ -555,7 +588,7 @@ void handleControlUpdate() {
     
   }
   
-  #if DEBUG_LEVEL == 4
+  #if DEBUG_LEVEL == 5
   for(x = 0 ; x < PPM_PULSES ; x++) {
     
     Serial1.print("Pulse[");
