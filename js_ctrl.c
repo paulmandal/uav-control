@@ -377,58 +377,8 @@ int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons) {
 
 }
 
-<<<<<<< HEAD
-/* doHandshake() - handshake with receiver */
-
-int doHandshake(int xbeePort) {
-
-	unsigned char handshakeMsg[MSG_SIZE_SYNC];
-	unsigned int checksum;
-	int i;
-	unsigned char *inMsg; // Incoming message buffer
-	int msgWaitingBytes = 1;              // Message waiting byte count
-	int readMsgBytes = 0;	              // How many bytes we've read so far
-	int gotMsgBegin = 0;                  // Mark whether or not we're currently reading a message
-	int gotMsgType = 0;                   // Mark whether we have a message type
-
-	inMsg = calloc(MSG_BUFFER_SIZE, sizeof(char)); // Allocate memory for our message buffer
-
-	handshakeMsg[0] = MSG_BEGIN;
-	handshakeMsg[1] = MSG_TYPE_SYNC;
-	for(i = 2 ; i < (MSG_SIZE_SYNC - 1) ; i++) {
-
-		handshakeMsg[i] = rand() % 255;  // Build the handshake msg, it is MSG_BEGIN + MSG_TYPE_SYNC + random characters + checksum
-		
-	}
-
-	checksum = 0x00;
-	for(i = 0 ; i < (MSG_SIZE_SYNC - 1) ; i++) {
-
-		checksum = checksum ^ (unsigned int)handshakeMsg[i];  // Build the checksum
-
-	}
-
-	handshakeMsg[MSG_SIZE_SYNC - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
-
-	printf(".");
-	fflush(stdout);
-	writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
-	usleep(20000);                                           // Give 20ms to respond, anything > 60ms will trigger lostSignal on the Arduino so be careful
-
-	for(i = 0 ; i < MSG_SIZE_SYNC ; i++) {
-
-		checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes);
-	}
-
-	free(inMsg);
-
-	return 1;	
-
-}
-
-=======
->>>>>>> debug-ifdef
 /* setupTimer() - set up pulse timer */
+
 void setupTimer() {
  
 	struct sigaction sa;
@@ -880,7 +830,6 @@ int checkMessages(unsigned char **_inMsg, int *_gotMsgBegin, int *_gotMsgType, i
 		if(!gotMsgBegin) { // We're waiting for a message begin marker, so check for one
 
 			if(testByte == MSG_BEGIN) {  // Found a message begin marker
->>>>>>> debug-ifdef
 
 				#if DEBUG_LEVEL == 1
 				printf("  MESSAGE BEGIN\n"); // Print the byte type	
