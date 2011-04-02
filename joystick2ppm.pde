@@ -101,6 +101,7 @@ void checkMessages();
 boolean testMessage(unsigned char *message, int length);
 void processMessage(unsigned char *message, int length);
 void checkSignal();
+void handleControlUpdate();
 void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh);
 
 /* Setup function */
