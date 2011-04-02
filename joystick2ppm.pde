@@ -18,7 +18,7 @@
 
 /* This is the defining moment of the file */
 
-#define DEBUG_LEVEL 1   // 1 - Messaging debugging
+#define DEBUG_LEVEL 0   // 1 - Messaging debugging
                         // 2 - Servo / pin output
                         // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
 #define DEBUG_PIN1  4   // Pin for debug signaling   
