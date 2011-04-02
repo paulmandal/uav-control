@@ -18,7 +18,7 @@
 
 /* This is the defining moment of the file */
 
-#define DEBUG_LEVEL 0   // 1 - Messaging debugging
+#define DEBUG_LEVEL 1   // 1 - Messaging debugging
                         // 2 - Servo / pin output
                         // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
 #define DEBUG_PIN1  4   // Pin for debug signaling   
@@ -202,7 +202,7 @@ void initTimer() {
   TIMSK2 = B00000010; // Interrupt on compare match with OCR2A
   TCCR2A = B00000010; // CTC mode
   TCCR2B = B00000111; // 1024 prescaler because 8bits does not store a lot
-  OCR2A  = 78; // ~100hz == (16MHz / (2 * 1024 * 78))
+  OCR2A  = 104; // changed: ~75Hz == (16MHz / (2 * 1024 * 104) ---- ~100hz == (16MHz / (2 * 1024 * 78))
   
 }
 
