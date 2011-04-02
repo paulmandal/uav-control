@@ -330,7 +330,7 @@ void checkMessages() {
 		Serial1.print(msgWaitingBytes);
 		Serial1.print("]: ");
 		Serial1.print(inMsg[x + 2], HEX);
-		Serial1.println("  MSG BEGIN");
+		Serial1.println("  DATA");
 		#endif
 
 
