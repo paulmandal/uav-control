@@ -194,7 +194,7 @@ void initTimer() {
   // Timer1, used to make PPM waveform real nice like
 
   TIMSK1 = B00000010; // Interrupt on compare match with OCR1A
-  TCCR1A = B01000011; // Fast PWM - Toggle pin on compare match
+  TCCR1A = B00000011; // Fast PWM - Toggle pin on compare match
   TCCR1B = B00011010; // Fast PWM, plus 8 prescaler, 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)
   DDRD  |= B00100000; // Enable output on this pin
   
