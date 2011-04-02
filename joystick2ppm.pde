@@ -21,7 +21,7 @@
 #define DEBUG_LEVEL 1
 
 #define VERSION_MAJOR 2     // Major version #
-#define VERSION_MINOR 2     // Minor #
+#define VERSION_MINOR 3     // Minor #
 #define VERSION_MOD   0     // Mod #
 
 #define MSG_SIZE_CTRL 14                      // Length of control update messages
@@ -34,6 +34,7 @@
 #define MSG_TYPE_PPZ  0x03                    // Message from PPZ
 #define MSG_TYPE_SYNC 0xFE                    // Sync message type indicator
 #define MSG_BUFFER_SIZE 128 		      // Message buffer size in bytes
+#define MSG_MIN_READ_INTERVAL 1               // 1ms per message byte because Serial.available() lies and gives us old bytes! :(
 #define CMDS_PER_ACK  50                      // Client will assume lost signal if we send this many commands without an ack
 #define MSG_INTERVAL  20                      // Control message update interval (20ms)
 #define LOST_MSG_THRESHOLD (MSG_INTERVAL * 3) // How long without legit msg before lostSignal gets set
@@ -77,7 +78,8 @@ enum ppmStates ppmState = ppmOFF;        // PPM status
 unsigned int channels[SERVO_COUNT];      // Servo channels
 
 unsigned char inMsg[MSG_BUFFER_SIZE];    // Incoming message buffer
-int msgWaitingBytes = 1;     // Message waiting byte count
+int msgWaitingBytes = 0;     // Message waiting byte count
+int msgReadBytes = 0;
 boolean gotMsgBegin = false; // Mark whether or not we're currently reading a message
 boolean gotMsgType = false;  // Mark whether we have a message type
 
@@ -101,6 +103,8 @@ void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh
 
 void setup() {
 
+  delay(100);                // Wait 100ms since some of our timers use millis() and it starts at 0.  They expect more from it.  They're disappoint.
+                             // This also gives PuTTY (using for diag on 2nd UART) time to open and connect
   randomSeed(analogRead(0)); // Seed our random number gen with an unconnected pins static
   initControlState();        // Initialise control state
   initOutputs();             // Initialise outputs
@@ -110,6 +114,13 @@ void setup() {
   Serial.flush();
   #if DEBUG_LEVEL == 1
   Serial1.begin(38400);      // Open PPZ port as debug
+  Serial1.print("joystick2ppm version ");
+  Serial1.print(VERSION_MAJOR);
+  Serial1.print(".");
+  Serial1.print(VERSION_MINOR);
+  Serial1.print(".");
+  Serial1.print(VERSION_MOD);
+  Serial1.println("...");
   Serial1.println("Open for debugging mode..");
   #endif
 
@@ -240,15 +251,18 @@ void checkMessages() {
 
   int x;
   unsigned char testByte;
-  if(Serial.available() >= msgWaitingBytes) {  // All of our bytes are here (either this is 1 or a message size), so process them
+  unsigned long currentTime = millis();
+  
+  if(Serial.available() > 0) {  // All of our bytes are here (either this is 1 or a message size), so process them
+
+    testByte = Serial.read();
 
     if(!gotMsgBegin) { // We're waiting for a message begin marker, so check for one
 
-	testByte = Serial.read();
 	if(testByte == MSG_BEGIN) {  // Found a message begin marker
 
 		#if DEBUG_LEVEL == 1
-		Serial1.print("BYTE[0/");
+		Serial1.print("BYTE[1/");
 		Serial1.print(msgWaitingBytes);
 		Serial1.print("]: ");
 		Serial1.print(testByte, HEX);
@@ -256,55 +270,64 @@ void checkMessages() {
 		#endif
 		inMsg[0] = testByte;
 		gotMsgBegin = true;
-
+                msgReadBytes = 1;
+                msgWaitingBytes = 2;
+                
 	} // Discard useless byte
-	#if DEBUG_LEVEL == 1	
-	Serial1.print("BYTE[0/");
-	Serial1.print(msgWaitingBytes);
-	Serial1.print("]: ");
-	Serial1.print(testByte, HEX);
-	Serial1.println("  JUNK BYTE");	
+	
+        #if DEBUG_LEVEL == 1	
+        else {
+          
+    	  Serial1.print("BYTE[0/");
+	  Serial1.print(msgWaitingBytes);
+	  Serial1.print("]: ");
+	  Serial1.print(testByte, HEX);
+	  Serial1.println("  JUNK BYTE");	
+        }
 	#endif
 
     } else if(!gotMsgType) {  // We're waiting for a message type marker, grab this one
 
+	inMsg[1] = testByte;
+
 	#if DEBUG_LEVEL == 1
-	Serial1.print("BYTE[1/");
+	Serial1.print("BYTE[2/");
 	Serial1.print(msgWaitingBytes);
 	Serial1.print("]: ");
 	Serial1.print(testByte, HEX);
 	Serial1.print("  MSG TYPE");
 	#endif
-	testByte = Serial.read();
-	inMsg[1] = testByte;
+
 	gotMsgType = true;
+        msgReadBytes = 2;
+
 	if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
 
 		#if DEBUG_LEVEL == 1
 		Serial1.println("-SYNC");
 		#endif
-		msgWaitingBytes = MSG_SIZE_SYNC - 2;  // Subtract 2 since we already read two bytes off the buffer
+		msgWaitingBytes = MSG_SIZE_SYNC;
 		
 	} else if(testByte == MSG_TYPE_CTRL) {
 
 		#if DEBUG_LEVEL == 1
 		Serial1.println("-CTRL");
 		#endif
-		msgWaitingBytes = MSG_SIZE_CTRL - 2;
+		msgWaitingBytes = MSG_SIZE_CTRL;
 
 	} else if(testByte == MSG_TYPE_PPZ) {
 
 		#if DEBUG_LEVEL == 1
 		Serial1.println("-PPZ");
 		#endif
-		msgWaitingBytes = MSG_SIZE_PPZ - 2;
+		msgWaitingBytes = MSG_SIZE_PPZ;
 
 	} else if(testByte == MSG_TYPE_CFG) {
 
 		#if DEBUG_LEVEL == 1
 		Serial1.println("-CFG");
 		#endif
-		msgWaitingBytes = MSG_SIZE_CFG - 2;
+		msgWaitingBytes = MSG_SIZE_CFG;
 	
 	} else { // Not a valid message type?  Ignore this garbage
 
@@ -319,28 +342,27 @@ void checkMessages() {
 
     } else { // We have our msgBegin and msgType markers, read the rest of the message into our buffer and handle it
 
-	for(x = 0 ; x < msgWaitingBytes ; x++) {  // Don't overwrite the msgBegin or msgType bytes
+        inMsg[msgReadBytes] = testByte;
+	#if DEBUG_LEVEL == 1
+	Serial1.print("BYTE[");
+	Serial1.print(msgReadBytes);
+	Serial1.print("/");
+	Serial1.print(msgWaitingBytes);
+	Serial1.print("]: ");
+	Serial1.print(testByte, HEX);
+	Serial1.println("  DATA");
+	#endif
+        msgReadBytes++;
 
-		inMsg[x + 2] = Serial.read();  // Read the rest of the message into our buffer
+        if(msgReadBytes >= msgWaitingBytes) {  // Message is done reading
 
-		#if DEBUG_LEVEL == 1
-		Serial1.print("BYTE[");
-		Serial1.print(x);
-		Serial1.print("/");
-		Serial1.print(msgWaitingBytes);
-		Serial1.print("]: ");
-		Serial1.print(inMsg[x + 2], HEX);
-		Serial1.println("  DATA");
-		#endif
-
-
-	}
-
-	if(testMessage(inMsg, msgWaitingBytes + 2)) {  // Test the message checksum
+	if(testMessage(inMsg, msgWaitingBytes)) {  // Test the message checksum
 
 		commandsSinceLastAck++;
+ 		lastMsgTime = millis(); // Only command messages count for this
+        	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
 
-		processMessage(inMsg, msgWaitingBytes + 2); // Execute or process the message
+		processMessage(inMsg, msgWaitingBytes); // Execute or process the message
 
 		if(commandsSinceLastAck > CMDS_PER_ACK) {
 
@@ -352,12 +374,14 @@ void checkMessages() {
 
 	gotMsgBegin = false;  // Set ready for next message
 	gotMsgType = false;  
-	msgWaitingBytes = 1;
+  	msgWaitingBytes = 1;
+
+        }
 
     }
 
   }
-
+ 
 }
 
 /* checkSignal() - Check the signal state and make necessary updates */
@@ -367,14 +391,24 @@ void checkSignal() {
   unsigned long currentTime = millis(); // get current time
   if((currentTime - lastMsgTime) > LOST_MSG_THRESHOLD) {
 
-    lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
-    ppmState = ppmOFF;                               // Disable PPM
-    statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
+    if(!lostSignal) {
+      
+      #if DEBUG_LEVEL > 0
+      Serial1.println("Lost signal due to lastMsgTime timeout!");
+      #endif
+      lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
+      ppmState = ppmOFF;                               // Disable PPM
+      statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
+    
+    }
 
   } else {
     
     if(ppmState == ppmOFF) {  // Restart PPM since it was off
-    
+
+        #if DEBUG_LEVEL > 0
+        Serial1.println("Restarting PPM");
+        #endif    
     	ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
 	currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
 	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
@@ -417,6 +451,8 @@ boolean testMessage(unsigned char *message, int length) {
 	#if DEBUG_LEVEL == 1
 	Serial1.print("CHK: ");
 	Serial1.println(checksum, HEX);
+        Serial1.print("CSLA: ");
+        Serial1.println(commandsSinceLastAck);
 	#endif
 
 	if(checksum == 0x00) {
@@ -438,6 +474,11 @@ void processMessage(unsigned char *message, int length) {
         int x;
 	unsigned char msgType = message[1];
 
+	#if DEBUG_LEVEL == 1
+        Serial1.print("CSLA: ");
+        Serial1.println(commandsSinceLastAck);
+	#endif
+
 	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
 		 sendAck(); // Send ACK for the SYNC signal
@@ -451,9 +492,6 @@ void processMessage(unsigned char *message, int length) {
 	         * BUTTONS   - 3 bytes - 2 bits per pin (allow more than on/off, e.g. 3-pos switch)
 	         * CHECKSUM  - 1 byte  - 1 byte XOR checksum
 	         */
- 
- 		lastMsgTime = millis(); // Only command messages count for this
-        	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
           
 	        for(x = 0 ; x < SERVO_COUNT ; x++) {
 
@@ -503,6 +541,7 @@ void sendAck() {
 	}
 	msgSync[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
 	Serial.write(msgSync, MSG_SIZE_SYNC);     // Send the sync ACK
+        Serial.flush();                          // Flush the serial buffer since it may be full of garbage
         commandsSinceLastAck = 0;               // Set commandsSinceLastAck to 0
 
 }
