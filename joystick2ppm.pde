@@ -18,10 +18,14 @@
 
 /* This is the defining moment of the file */
 
-#define DEBUG_LEVEL 1
+#define DEBUG_LEVEL 3   // 1 - Messaging debugging
+                        // 2 - Servo / pin output
+                        // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
+#define DEBUG_PIN1  4   // Pin for debug signaling   
+                     
 
 #define VERSION_MAJOR 2     // Major version #
-#define VERSION_MINOR 3     // Minor #
+#define VERSION_MINOR 4     // Minor #
 #define VERSION_MOD   0     // Mod #
 
 #define MSG_SIZE_CTRL 14                      // Length of control update messages
@@ -122,6 +126,10 @@ void setup() {
   Serial1.print(VERSION_MOD);
   Serial1.println("...");
   Serial1.println("Open for debugging mode..");
+  #endif
+  
+  #if DEBUG_LEVEL == 3
+  pinMode(DEBUG_PIN1, OUTPUT);  //  DEBUG - Pin will light permanently if signal is lost
   #endif
 
 }
@@ -393,20 +401,23 @@ void checkSignal() {
 
     if(!lostSignal) {
       
-      #if DEBUG_LEVEL > 0
+      #if DEBUG_LEVEL == 1
       Serial1.println("Lost signal due to lastMsgTime timeout!");
       #endif
       lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
       ppmState = ppmOFF;                               // Disable PPM
       statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
-    
+      #if DEBUG_LEVEL == 3
+      digitalWrite(DEBUG_PIN1, HIGH);
+      #endif
+      
     }
 
   } else {
     
     if(ppmState == ppmOFF) {  // Restart PPM since it was off
 
-        #if DEBUG_LEVEL > 0
+        #if DEBUG_LEVEL == 1
         Serial1.println("Restarting PPM");
         #endif    
     	ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
