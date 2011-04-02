@@ -398,6 +398,7 @@ void checkSignal() {
       #endif
       lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
       ppmState = ppmOFF;                               // Disable PPM
+      TCCR1A &= B10111111;                             // Disable output pin
       statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
       #if DEBUG_LEVEL == 3
       digitalWrite(DEBUG_PIN1, HIGH);
@@ -413,6 +414,7 @@ void checkSignal() {
         Serial1.println("Restarting PPM");
         #endif    
     	ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
+        TCCR1A |= B01000000;                    // Enable output pin
 	currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
 	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
     
@@ -605,7 +607,7 @@ ISR(TIMER1_COMPA_vect) {
     ppmState = ppmLOW;          // Set ppmState LOW
 
   } else {
-
+    
     OCR1A = PPM_HIGH_PULSE;     // Short interval (200us)
     digitalWrite(PPM_PIN, LOW); // Pin is set to low (off), PPM is disabled
 
