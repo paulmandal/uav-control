@@ -18,7 +18,7 @@
 
 /* This is the defining moment of the file */
 
-#define DEBUG_LEVEL 4   // 1 - Messaging debugging
+#define DEBUG_LEVEL 3   // 1 - Messaging debugging
                         // 2 - Servo / pin output
                         // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
                         // 4 - PPM registers
@@ -272,7 +272,7 @@ void checkMessages() {
 		Serial1.print(testByte, HEX);
 		Serial1.println("  MSG BEGIN");
 		#endif
-		inMsg[0] = testByte;
+		inMsg[0] = testByte; // Store testByte in the first slot of our message buffer
 		gotMsgBegin = true;
                 msgReadBytes = 1;
                 msgWaitingBytes = 2;
@@ -292,7 +292,7 @@ void checkMessages() {
 
     } else if(!gotMsgType) {  // We're waiting for a message type marker, grab this one
 
-	inMsg[1] = testByte;
+	inMsg[1] = testByte; // Store testByte in the 2nd slot of our message buffer
 
 	#if DEBUG_LEVEL == 1
 	Serial1.print("BYTE[2/");
@@ -418,45 +418,20 @@ void checkSignal() {
         #if DEBUG_LEVEL == 1
         Serial1.println("Restarting PPM");
         #endif        
+
         DDRD  |= B00100000;                     // Enable output on OC1A
         TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A        
-        #if DEBUG_LEVEL == 4
-        Serial1.print("OCR1A: ");
-        Serial1.print(OCR1A, DEC);
-        Serial1.println("  Incoming value to ppm->ON");
-        Serial1.print("currentPulse: ");
-        Serial1.println(currentPulse);
-        #endif        
-    	ppmON = true;                           // Turn ppm LOW (since the signal is probably off)
-	currentPulse = 1;                       // Set our currentPulse to first pulse
-        TCCR1A = B11000000;                     // CTC, set high on match
-        TCCR1B = B00001000;                     // CTC, clock disabled, see what happen
-        OCR1A  = 4040;//PPM_SYNC_PULSE;         // Set the compare register to whatever we like, the clock is off        
-        #if DEBUG_LEVEL == 4
-        Serial1.print("OCR1A: ");
-        Serial1.print(OCR1A, DEC);
-        Serial1.println(" OCR1A = 4040 by ppm->ON, currentPulse = 1 by ppm->ON");
-        Serial1.print("currentPulse: ");
-        Serial1.println(currentPulse);
-        #endif        
-        TCCR1C = B10000000;                     // Force match, should set pin high, and OCR1A to the first high pulse        
-        #if DEBUG_LEVEL == 4
-        Serial1.print("OCR1A: ");
-        Serial1.print(OCR1A, DEC);
-        Serial1.println(" OCR1A = 4040 - after FOC1A Force Match");
-        Serial1.print("currentPulse: ");
-        Serial1.println(currentPulse);
-        #endif             
-        OCR1A = pulses[0];
-        #if DEBUG_LEVEL == 4
-        Serial1.print("OCR1A: ");
-        Serial1.print(OCR1A, DEC);
-        Serial1.print(" OCR1A = pulses[0] == ");
-        Serial1.println(pulses[0]);
-        Serial1.print("currentPulse: ");
-        Serial1.println(currentPulse);
-        #endif        
-        TCCR1A = B01000011;                     // Fast PWM
+
+    	ppmON = true;                           
+        OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
+	currentPulse = 1;                       // Set currentPulse to 1 since there will be no ISR() call to increment it
+
+        TCCR1A = B11000000;                     // CTC, set OC1A HIGH on match
+        TCCR1B = B00001000;                     // CTC, clock disabled, OCR1A has our value for pulse[0] but will never be reached by TCNT1 'coz no clock
+
+        TCCR1C = B10000000;                     // Force match, should set pin high, WILL NOT generate ISR() call        
+
+        TCCR1A = B01000011;                     // Fast PWM mode, will generate ISR() when it reaches OCR1A (pulse[0]), thus starting the PPM signal
         TCCR1B = B00011010;                     // Fast PWM, plus 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)
 	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
     
