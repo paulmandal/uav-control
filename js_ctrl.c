@@ -61,7 +61,7 @@ Adruino:
 			      // Debug level - 2 - Debug joystick position info
 
 #define VERSION_MAJOR 2       // Version information, Major #
-#define VERSION_MINOR 5       // Minor #
+#define VERSION_MINOR 6       // Minor #
 #define VERSION_MOD   0       // Mod #
 
 #define MSG_SIZE_CTRL 14      // Length of control update messages
@@ -273,13 +273,6 @@ int main (int argc, char **argv)
 
 		checkSignal();  // Check if our signal is still good
 
-		/*while(read(ppzPort, &ppzBuffer, 256) > 0) {  // check PPZ port
-
-			
-				printf("PPZ:  %s\n", ppzBuffer);
-
-		}*/
-
 		usleep(1);
 	
 	}
@@ -327,8 +320,8 @@ int openPort(char *portName, char *use) {
 	struct termios options;  // The port opened, set it up the port
 
 	tcgetattr(fd, &options);              // Get current settings
-	cfsetispeed(&options, B115200);        // Set input speed to 38400
-	cfsetospeed(&options, B115200);        // Set output speed to 38400
+	cfsetispeed(&options, B115200);        // Set input speed to 115200
+	cfsetospeed(&options, B115200);        // Set output speed to 115200
 	options.c_cflag |= (CLOCAL | CREAD);  // Set sum flags (CLOCAL & CREAD)
 	tcsetattr(fd, TCSANOW, &options);     // Set options
 
