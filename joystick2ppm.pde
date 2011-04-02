@@ -21,6 +21,7 @@
 #define DEBUG_LEVEL 3   // 1 - Messaging debugging
                         // 2 - Servo / pin output
                         // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
+                        // 4 - PPM Debugging (output PPM info)
 #define DEBUG_PIN1  4   // Pin for debug signaling   
                      
 
@@ -51,6 +52,7 @@
 #define PPM_MAX_PULSE 2000  // Max pulse length (2ms)
 #define PPM_HIGH_PULSE 200  // Delay between pulses (200us)
 #define PPM_FREQUENCY 20000 // Frequency of PPM frame (20ms)
+#define PPM_PULSES ((SERVO_COUNT * 2) + 3)  // How many pulses are there in the whole PPM (One 220us HIGH per servo, then 1ms-2ms LOW for servo pos, then 220us HIGH for pulse, then PPM_SYNC_PULSE LOW)
 #define PPM_SYNC_PULSE (PPM_FREQUENCY - (SERVO_COUNT * (((PPM_MAX_PULSE + PPM_MIN_PULSE) / 2) + PPM_HIGH_PULSE))) // Duration of sync pulse
 
 #define STATUS_LED_PIN 0
@@ -76,10 +78,9 @@ unsigned long lastStatusLEDTime = 0;     // Time of last status LED change
 unsigned long statusLEDInterval = 0;     // Current status LED toggle interval
 boolean statusLEDState = false;          // Status LED state
 
-volatile byte currentChannel = 0;        // The channel being pulsed
-enum ppmStates { ppmOFF, ppmHIGH, ppmLOW };
-enum ppmStates ppmState = ppmOFF;        // PPM status
-unsigned int pulses[SERVO_COUNT];        // PPM pulses
+volatile byte currentPulse = 0;        // The channel being pulsed
+boolean  ppmON = false;
+unsigned int pulses[PPM_PULSES];        // PPM pulses
 
 unsigned char inMsg[MSG_BUFFER_SIZE];    // Incoming message buffer
 int msgWaitingBytes = 0;     // Message waiting byte count
@@ -106,7 +107,7 @@ void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh
 /* Setup function */
 
 void setup() {
-
+    
   delay(100);                // Wait 100ms since some of our timers use millis() and it starts at 0.  They expect more from it.  They're disappoint.
                              // This also gives PuTTY (using for diag on 2nd UART) time to open and connect
   randomSeed(analogRead(0)); // Seed our random number gen with an unconnected pins static
@@ -116,7 +117,7 @@ void setup() {
   initTimer();               // Turn on Timer
   Serial.begin(115200);      // Open XBee/GCS Serial
   Serial.flush();
-  #if DEBUG_LEVEL == 1
+  #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 2 || DEBUG_LEVEL == 4
   Serial1.begin(115200);      // Open PPZ port as debug
   Serial1.print("joystick2ppm version ");
   Serial1.print(VERSION_MAJOR);
@@ -177,13 +178,25 @@ void initPPM() {
   int midPPMPulse = (PPM_MIN_PULSE + PPM_MAX_PULSE) / 2;  
   pinMode(PPM_PIN,OUTPUT);  // Setup PPM output Pin
 
-  for (x = 0 ; x < SERVO_COUNT ; x++) {
+  for (x = 0 ; x < (SERVO_COUNT + 1) ; x++) {
     
-    pulses[x] = midPPMPulse; // Set all PPM pulses to halfpulse
+    pulses[x * 2] = PPM_HIGH_PULSE;
+    pulses[(x * 2) + 1] = midPPMPulse; // Set all PPM pulses to halfpulse
     
   }
+  pulses[PPM_PULSES - 1] = PPM_SYNC_PULSE;
 
-  currentChannel = 0; // init currentChannel
+  #if DEBUG_LEVEL == 4
+  for(x = 0 ; x < PPM_PULSES ; x++) {
+    
+    Serial1.print("Pulse[");
+    Serial1.print(x);
+    Serial1.print("]: ");
+    Serial1.println(pulses[x]);
+    
+  }
+  #endif
+  currentPulse = 0; // init currentPulse
 
 }
 
@@ -194,7 +207,7 @@ void initTimer() {
   // Timer1, used to make PPM waveform real nice like
 
   TIMSK1 = B00000010; // Interrupt on compare match with OCR1A
-  TCCR1A = B00000011; // Fast PWM - Toggle pin on compare match
+  TCCR1A = B00000011; // Fast PWM
   TCCR1B = B00011010; // Fast PWM, plus 8 prescaler, 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)
   DDRD  |= B00100000; // Enable output on this pin
   
@@ -397,8 +410,8 @@ void checkSignal() {
       Serial1.println("Lost signal due to lastMsgTime timeout!");
       #endif
       lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
-      ppmState = ppmOFF;                               // Disable PPM
-      TCCR1A &= B10111111;                             // Disable output pin
+      ppmON = false;                                   // Disable PPM
+      TCCR1A &= B00001111;                             // Disable output pins
       statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
       #if DEBUG_LEVEL == 3
       digitalWrite(DEBUG_PIN1, HIGH);
@@ -408,14 +421,14 @@ void checkSignal() {
 
   } else {
     
-    if(ppmState == ppmOFF) {  // Restart PPM since it was off
+    if(!ppmON) {  // Restart PPM since it was off
 
         #if DEBUG_LEVEL == 1
         Serial1.println("Restarting PPM");
         #endif    
-    	ppmState = ppmLOW;                      // Turn ppm LOW (since the signal is probably off)
+    	ppmON = true;                           // Turn ppm LOW (since the signal is probably off)
         TCCR1A |= B01000000;                    // Enable output pin
-	currentChannel = SERVO_COUNT;           // Set our currentChannel to the last channel
+	currentPulse = 0;                       // Set our currentPulse to the last channel
 	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
     
     }
@@ -429,7 +442,7 @@ void checkSignal() {
 void storePulse(byte targetChannel, int inValue, int inRangeLow, int inRangeHigh) {
 
   unsigned int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
-  pulses[targetChannel] = mappedPulse; // Store new pulse width
+  pulses[(targetChannel * 2) + 1] = mappedPulse; // Store new pulse width
 
 }
 
@@ -546,6 +559,17 @@ void handleControlUpdate() {
     
   }
   
+  #if DEBUG_LEVEL == 4
+  for(x = 0 ; x < PPM_PULSES ; x++) {
+    
+    Serial1.print("Pulse[");
+    Serial1.print(x);
+    Serial1.print("]: ");
+    Serial1.println(pulses[x]);
+    
+  }
+  #endif
+  
 }
 
 /* sendAck() - Send SYNC acknowledgement message */
@@ -584,33 +608,12 @@ void sendAck() {
 
 ISR(TIMER1_COMPA_vect) {
 
-  if(ppmState == ppmLOW) {
-
-    OCR1A = PPM_HIGH_PULSE;      // Pin will stay high for PPM_HIGH_PULSE duration
-    digitalWrite(PPM_PIN, HIGH); // Pin was low, set it to HIGH
-    ppmState = ppmHIGH;          // Set ppmState HIGH
-     
-  } else if(ppmState == ppmHIGH) {
-
-    if(currentChannel > (SERVO_COUNT - 1)) {
-      
-      currentChannel = 0;     // Hit max servo count, reset to 0 channel
-      OCR1A = PPM_SYNC_PULSE; // This is the sync pulse, set time to sync pulse time
-      
-    } else {
-      
-      OCR1A = pulses[currentChannel]; // Pin will stay low for pulses[currentChannel] duration
-      currentChannel++;
+  OCR1A = pulses[currentPulse];
+  currentPulse++;
+  if(currentPulse > PPM_PULSES) {
     
-    }
-    digitalWrite(PPM_PIN, LOW); // Pin was high, set it to LOW
-    ppmState = ppmLOW;          // Set ppmState LOW
-
-  } else {
+    currentPulse = 0;
     
-    OCR1A = PPM_HIGH_PULSE;     // Short interval (200us)
-    digitalWrite(PPM_PIN, LOW); // Pin is set to low (off), PPM is disabled
-
   }
  
 }
