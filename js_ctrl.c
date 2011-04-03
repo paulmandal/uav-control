@@ -61,7 +61,7 @@ Adruino:
 			      // Debug level - 2 - Debug joystick position info
 
 #define VERSION_MAJOR 2       // Version information, Major #
-#define VERSION_MINOR 6       // Minor #
+#define VERSION_MINOR 8       // Minor #
 #define VERSION_MOD   0       // Mod #
 
 #define MSG_SIZE_CTRL 14      // Length of control update messages
