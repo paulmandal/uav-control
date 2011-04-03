@@ -248,7 +248,11 @@ int main (int argc, char **argv)
 
 			while(!handShook) {  // Handshaking loop
 
-				checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes);  // Check for new messages that might have handshake
+				if(!checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes)) { // Check for pending msg bytes
+
+					usleep(100); // If nothing is there pause for 100usec, handshake is sent out by interrupt at 50Hz
+
+				};
 
 			}
 
@@ -265,11 +269,11 @@ int main (int argc, char **argv)
 		#endif
 		
 		int x;
-		for(x = 0 ; x < MSG_SIZE_SYNC ; x++) {
+		for(x = 0 ; x < MSG_SIZE_SYNC ; x++) {  // Try to read MSG_SIZE_SYNC bytes per loop
 
 			if(!checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes)) { // Check for pending msg bytes
 
-				usleep(10); // If there was nothing pending pause for 10usec, max pause per loop is MSG_SIZE_SYNC * 10usec = 140usec
+				usleep(71); // If there was nothing pending pause for 71usec, max pause per loop is MSG_SIZE_SYNC * 71usec = 994usec, a little less than 1ms
 			};  
 
 		}
