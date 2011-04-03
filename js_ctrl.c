@@ -265,15 +265,16 @@ int main (int argc, char **argv)
 		#endif
 		
 		int x;
-		for(x = 0 ; x < 64 ; x++) {
+		for(x = 0 ; x < MSG_SIZE_SYNC ; x++) {
 
-			checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes);  // Check for pending msg bytes
+			if(!checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes)) { // Check for pending msg bytes
+
+				usleep(10); // If there was nothing pending pause for 10usec, max pause per loop is MSG_SIZE_SYNC * 10usec = 140usec
+			};  
 
 		}
 
 		checkSignal();  // Check if our signal is still good
-
-		usleep(1);
 	
 	}
 
