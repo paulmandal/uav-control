@@ -152,7 +152,7 @@ void readJoystick(int jsPort, struct jsState *_joystickState, int *_prevLeftThro
 int openPort(char *portName, char *use);
 int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons);
 int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile, char **joystickEventFile);
-void setupTimer();
+void initTimer();
 void translateJStoAF(struct jsState joystickState);
 void printState(struct jsState joystickState, int axes);
 void initAirframe();
@@ -230,7 +230,7 @@ int main (int argc, char **argv)
 		return 1;
 	}
 
-	setupTimer(); 	// Set up timer (every 20ms)
+	initTimer(); 	// Set up timer (every 20ms)
 
 	printf("Ready to read JS & relay for PPZ...\n");
 
@@ -382,9 +382,9 @@ int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons) {
 
 }
 
-/* setupTimer() - set up pulse timer */
+/* initTimer() - set up pulse timer */
 
-void setupTimer() {
+void initTimer() {
  
 	struct sigaction sa;
 	struct itimerval timer;
