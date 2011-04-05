@@ -162,7 +162,7 @@ void sendCtrlUpdate (int signum);
 void readJoystick(int jsPort, jsState *joystickState);
 int openPort(char *portName, char *use);
 int openJoystick(char *portName, jsState *joystickState);
-int readConfig(configValues *configInfo);
+int readConfig(configValues *configInfo, jsState *joystickState);
 void initTimer();
 void translateJStoAF(jsState joystickState);
 void printState(jsState joystickState);
@@ -217,7 +217,7 @@ int main (int argc, char **argv)
 
 	inMsg = calloc(MSG_BUFFER_SIZE, sizeof(char));  // Allocate memory for our message buffer
 	
-	if(readConfig(&configInfo) < 0) { // Read our config into our config vars
+	if(readConfig(&configInfo, &joystickState) < 0) { // Read our config into our config vars
 
 		perror("js_ctrl"); // Error reading config file
 		return 1;
@@ -415,7 +415,7 @@ void initTimer(configValues configInfo) {
 
 /* readJoystick(jsPort, joystickState) - Read joystick state from jsPort, update joystickState */
 
-void readJoystick(int jsPort, jsState *joystickState) {
+void readJoystick(int jsPort, jsState *joystickState, configValues configInfo) {
 
 	struct js_event js;
 	int jsValue;
@@ -452,13 +452,13 @@ void readJoystick(int jsPort, jsState *joystickState) {
 				break;
 			case JS_EVENT_AXIS:
 
-				if(abs(js.value) > JS_DISCARD_UNDER) {  // If the value is greater than our discard value set it
+				if(abs(js.value) > configInfo.jsDiscardUnder) {  // If the value is greater than our discard value set it
 			
 					jsValue = js.value;
 					
 				} else {
 
-					jsValue = 0;  // Disregard values less than JS_DISCARD_UNDER to avoid excessively sensitive sticks
+					jsValue = 0;  // Disregard values less than configInfo.jsDiscardUnder to avoid excessively sensitive sticks
 
 				}
 
@@ -694,7 +694,7 @@ void printState(jsState joystickState) {
 
 /* readConfig() - Read values from configuration file */
 
-int readConfig(configValues *configInfo) {
+int readConfig(configValues *configInfo, jsState *joystickState) {
 
 	FILE *fp;
 	int readCount = 0, lineBuffer = 1024;
@@ -776,6 +776,20 @@ int readConfig(configValues *configInfo) {
 
 			} else if(strcmp(line, "[Button State Count]") ==0) {
 
+
+				joystickState->buttonStateCount = calloc(12,sizeof(int));
+				joystickState->buttonStateCount[0] = 0;
+				joystickState->buttonStateCount[1] = 0;
+				joystickState->buttonStateCount[2] = 0;
+				joystickState->buttonStateCount[3] = 0;
+				joystickState->buttonStateCount[4] = 0;
+				joystickState->buttonStateCount[5] = 0;
+				joystickState->buttonStateCount[6] = 0;
+				joystickState->buttonStateCount[7] = 0;
+				joystickState->buttonStateCount[8] = 0;
+				joystickState->buttonStateCount[9] = 0;
+				joystickState->buttonStateCount[10] = 0;
+				joystickState->buttonStateCount[11] = 0;
 					// TODO
 	
 			}

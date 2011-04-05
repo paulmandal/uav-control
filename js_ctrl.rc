@@ -6,3 +6,10 @@
 /dev/input/js0
 [Joystick Event File]
 /dev/input/event4
+[Joystick Discard Threshold]
+5000
+[PPM Interval]
+20000
+[Commands Per Ack]
+60
+[Button State Count]
