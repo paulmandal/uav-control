@@ -74,11 +74,8 @@ Adruino:
 #define MSG_TYPE_PPZ  0x03    // Message from PPZ
 #define MSG_TYPE_SYNC 0xFE    // Sync message type indicator
 #define MSG_BUFFER_SIZE 128   // Message buffer size in bytes
-#define CMDS_PER_ACK  60      // Assume lost signal if we send this many commands without an ack
 
 #define NAME_LENGTH 128       // Length of Joystick name
-#define PPM_INTERVAL 20000    // Interval for state send message
-#define JS_DISCARD_UNDER 5000 // Discard joystick inputs under this level (joystick is very sensitive)
 #define CAM_PAN 4             // Camera Pan axis #
 #define CAM_TILT 5            // Camera Tilt axis #
 #define ROLL 0                // Roll axis #
@@ -124,43 +121,57 @@ Adruino:
 #define SRV_CAM_PAN 6
 #define SRV_CAM_TILT 7
 
-#define TOGGLE_BUTTONS     0,0,0,0,1,0,0,0,0,0,0,0  // Specify which buttons are toggle buttons
-#define BUTTON_STATE_COUNT 2,0,0,0,0,0,0,0,0,0,0,0  // Specify the state count for the buttons
-
 #define CONFIG_FILE "js_ctrl.rc"  // Config file name
 #define CONFIG_FILE_MIN_COUNT 4   // # of variables stored in config file 
 
 /* Structures */
 
-struct jsState {  // Store the axis and button states globally accessible
+typedef struct s_jsState {  // Store the axis and button states globally accessible
 	int *axis;
-	char *button;	
-};
+	char *button;
+	int prevLeftThrottle;
+	int prevRightThrottle;	
+	unsigned char axes = 2;
+	unsigned char buttons = 2;
+} jsState;
 
-struct afState { // Store the translated (servo + buttons) states, globally accessible
+typedef struct s_afState { // Store the translated (servo + buttons) states, globally accessible
 
 	unsigned int servos[SERVO_COUNT];
 	unsigned int buttons[BUTTON_COUNT];
 
-};
+} afState;
+
+typedef struct s_configValues {
+
+	char *joystickEventFile; // joystickEvent filename (for RUMBLE!)
+	char *joystickPortFile;  // joystickPort filename
+	char *xbeePortFile;      // xbeePort filename
+	char *ppzPortFile;       // ppzPort filename
+	int *buttonStateCount;   // Button state counts
+	int jsDiscardUnder;	 // Joystick discard under threshold
+	int ppmInterval;	 // Interval to send commands to XBee
+	int commandsPerAck;      // How many commands without ACK before setting lostSignal
+
+} configValues;
 
 /* Let's do sum prototypes! */
 
 int map(int value, int inRangeLow, int inRangeHigh, int outRangeLow, int outRangeHigh);
 void sendCtrlUpdate (int signum);
-void readJoystick(int jsPort, struct jsState *_joystickState, int *_prevLeftThrottle, int *_prevRightThrottle);
+void readJoystick(int jsPort, jsState *joystickState);
 int openPort(char *portName, char *use);
-int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons);
-int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile, char **joystickEventFile);
+int openJoystick(char *portName, jsState *joystickState);
+int readConfig(configValues *configInfo);
 void initTimer();
-void translateJStoAF(struct jsState joystickState);
-void printState(struct jsState joystickState, int axes);
+void translateJStoAF(jsState joystickState);
+void printState(jsState joystickState);
 void initAirframe();
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
 int checkMessages(unsigned char **_inMsg, int *_gotMsgBegin, int *_gotMsgType, int *_readMsgBytes, int *_msgWaitingBytes);
 int testMessage(unsigned char *message, int length);
-void checkSignal();
+void checkSignal(int commandsPerAck);
 void processMessage(unsigned char *message, int length);
 
 /* Global configuration info */
@@ -176,27 +187,25 @@ unsigned long dpadPressTime[4] = {  // Store last DPad button press time
 
 // global variables to store states
 
-struct afState airframeState;  // Current airframe state
+afState airframeState;  // Current airframe state
 int ppzPort;                   // PPZ port FD
 int xbeePort;                  // XBee port FD
 
-int commandsSinceLastAck = 0;  // Commands sent since last ACK
-int handShook = 0;             // Handshook?
+volatile int commandsSinceLastAck = 0;  // Commands sent since last ACK
+volatile int handShook = 0;             // Handshook?
+
+#if DEBUG_LEVEL > 0
+int debugCommandsPerAck = 0;
+#endif
 
 /* Main function */
 
 int main (int argc, char **argv)
 {
 	int jsPort;  // JoystickPort FD
-	int prevLeftThrottle = 0, prevRightThrottle = 0; // Previous throttle values
-	char *joystickEventFile = NULL;       // joystickEvent filename (for RUMBLE!)
-	char *joystickPortFile = NULL;        // joystickPort filename
-	char *xbeePortFile = NULL;            // xbeePort filename
-	char *ppzPortFile = NULL;             // ppzPort filename
-	struct jsState joystickState;         // Current joystick state
+	jsState joystickState;                // Current joystick state
+	configValues configInfo;   	      // Configuration values
 	unsigned char *inMsg;                 // Incoming message buffer
-	unsigned char axes = 2;               // Joystick axes
-	unsigned char buttons = 2;	      // Joystick buttons
 	int msgWaitingBytes = 1;              // Message waiting byte count
 	int readMsgBytes = 0;	              // How many bytes we've read so far
 	int gotMsgBegin = 0;                  // Mark whether or not we're currently reading a message
@@ -208,7 +217,7 @@ int main (int argc, char **argv)
 
 	inMsg = calloc(MSG_BUFFER_SIZE, sizeof(char));  // Allocate memory for our message buffer
 	
-	if(readConfig(&xbeePortFile, &ppzPortFile, &joystickPortFile, &joystickEventFile) < 0) { // Read our config into our config vars
+	if(readConfig(&configInfo) < 0) { // Read our config into our config vars
 
 		perror("js_ctrl"); // Error reading config file
 		return 1;
@@ -226,16 +235,13 @@ int main (int argc, char **argv)
 		return 1;
 	}*/
 
-	if((jsPort = openJoystick(joystickPortFile, &axes, &buttons)) < 0) { // open the Joystick
+	if((jsPort = openJoystick(joystickPortFile, &joystickState)) < 0) { // open the Joystick
 		return 1;
 	}
 
 	initTimer(); 	// Set up timer (every 20ms)
 
 	printf("Ready to read JS & relay for PPZ...\n");
-
-	joystickState.axis = calloc(axes, sizeof(int));        // Allocate memory for joystick axes
-	joystickState.button = calloc(buttons, sizeof(char));  // Allocate memory for joystick buttons
 
 	while (1) {
 
@@ -260,12 +266,12 @@ int main (int argc, char **argv)
 	
 		}
 
-		readJoystick(jsPort, &joystickState, &prevLeftThrottle, &prevRightThrottle);  // Check joystick for updates
+		readJoystick(jsPort, &joystickState);  // Check joystick for updates
 
 		translateJStoAF(joystickState);	// update Airframe model
 
 		#if DEBUG_LEVEL == 2
-		printState(joystickState, axes); 	// print JS & AF state
+		printState(joystickState); 	// print JS & AF state
 		#endif
 		
 		int x;
@@ -278,7 +284,7 @@ int main (int argc, char **argv)
 
 		}
 
-		checkSignal();  // Check if our signal is still good
+		checkSignal(configInfo.commandsPerAck);  // Check if our signal is still good
 	
 	}
 
@@ -336,7 +342,7 @@ int openPort(char *portName, char *use) {
 
 /* openJoystick() - Open the joystick port portName */
 
-int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons) {
+int openJoystick(char *portName, jsState *joystickState) {
 
 	uint16_t btnmap[BTNMAP_SIZE];
 	uint8_t axmap[AXMAP_SIZE];
@@ -352,9 +358,12 @@ int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons) {
 	}
 
 	ioctl(fd, JSIOCGVERSION, &version);        // Get the joystick driver version
-	ioctl(fd, JSIOCGAXES, axes);              // Get the axes count
-	ioctl(fd, JSIOCGBUTTONS, buttons);        // Get the button count
+	ioctl(fd, JSIOCGAXES, joystickState->axes);              // Get the axes count
+	ioctl(fd, JSIOCGBUTTONS, joystickState->buttons);        // Get the button count
 	ioctl(fd, JSIOCGNAME(NAME_LENGTH), name);  // Get the joystick name
+
+	joystickState->axis = calloc(axes, sizeof(int));        // Allocate memory for joystick axes
+	joystickState->button = calloc(buttons, sizeof(char));  // Allocate memory for joystick buttons
 
 	getaxmap(fd, axmap);   // Get the axis map
 	getbtnmap(fd, btnmap); // Get the button map
@@ -363,7 +372,7 @@ int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons) {
 		version >> 16, (version >> 8) & 0xff, version & 0xff); // Display driver version to user
 
 	/* Determine whether the button map is usable. */
-	for (i = 0; btnmapok && i < *buttons; i++) {
+	for (i = 0; btnmapok && i < joystickState->buttons; i++) {
 		if (btnmap[i] < BTN_MISC || btnmap[i] > KEY_MAX) {
 			btnmapok = 0;
 			break;
@@ -372,10 +381,10 @@ int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons) {
 	if (!btnmapok) {
 		/* btnmap out of range for names. Don't print any. */
 		puts("js_ctrl is not fully compatible with your kernel. Unable to retrieve button map!");
-		printf("Joystick (%s) has %d axes ", name, *axes);
-		printf("and %d buttons.\n", *buttons);
+		printf("Joystick (%s) has %d axes ", name, joystickState->axes);
+		printf("and %d buttons.\n", joystickState->buttons);
 	} else {
-		printf("Joystick (%s) initialised with %d axes and %d buttons.\n", name, *axes, *buttons);  // Button map is OK, print joystick info
+		printf("Joystick (%s) initialised with %d axes and %d buttons.\n", name, joystickState->axes, joystickState->buttons);  // Button map is OK, print joystick info
 	}
 
 	return fd;  // Return joystick file descriptor
@@ -384,66 +393,50 @@ int openJoystick(char *portName, unsigned char *axes, unsigned char *buttons) {
 
 /* initTimer() - set up pulse timer */
 
-void initTimer() {
+void initTimer(configValues configInfo) {
  
 	struct sigaction sa;
 	struct itimerval timer;
 	
 	printf("Setting up timer..\n");
-	memset (&sa, 0, sizeof (sa));              // Make signal object
-	sa.sa_handler = &sendCtrlUpdate;           // Set signal function handler in 'sa'
-	sigaction (SIGALRM, &sa, NULL);            // Set SIGALRM signal handler
+	memset (&sa, 0, sizeof (sa));                       // Make signal object
+	sa.sa_handler = &sendCtrlUpdate;                    // Set signal function handler in 'sa'
+	sigaction (SIGALRM, &sa, NULL);                     // Set SIGALRM signal handler
 
 	timer.it_value.tv_sec = 0;
-	timer.it_value.tv_usec = PPM_INTERVAL;     // Set timer interval to 20000usec (20ms)
+	timer.it_value.tv_usec = configInfo.ppmInterval;    // Set timer interval to 20000usec (20ms)
 	timer.it_interval.tv_sec = 0;
-	timer.it_interval.tv_usec = PPM_INTERVAL;  // Set timer reset to 20000usec (20ms)
+	timer.it_interval.tv_usec = configInfo.ppmInterval; // Set timer reset to 20000usec (20ms)
 
 	printf("Starting pulse timer..\n");
-	setitimer (ITIMER_REAL, &timer, NULL);     // Start the timer
+	setitimer(ITIMER_REAL, &timer, NULL);               // Start the timer
 
 }
 
 /* readJoystick(jsPort, joystickState) - Read joystick state from jsPort, update joystickState */
 
-void readJoystick(int jsPort, struct jsState *_joystickState, int *_prevLeftThrottle, int *_prevRightThrottle) {
+void readJoystick(int jsPort, jsState *joystickState) {
 
 	struct js_event js;
 	int jsValue;
-	int toggleButtons[12] = { TOGGLE_BUTTONS };
 	int buttonStateCount[12] = { BUTTON_STATE_COUNT };
-	struct jsState joystickState;
-	int prevLeftThrottle;
-	int prevRightThrottle;
-
-	prevLeftThrottle = *_prevLeftThrottle;
-	prevRightThrottle = *_prevRightThrottle;
-	joystickState = *_joystickState;
 
 	while(read(jsPort, &js, sizeof(struct js_event)) == sizeof(struct js_event)) {
 
 			switch(js.type & ~JS_EVENT_INIT) {
 			case JS_EVENT_BUTTON:
 
-				if(toggleButtons[js.number] == 1) {  // Check if the button is a toggle or not
-
-					if(js.value == 1) { // If it is a toggle and this event is a button press, toggle the button
-
-						joystickState.button[js.number] = !joystickState.button[js.number];
-
-					}
-				
-				} else if(buttonStateCount[js.number] > 0) {  // Check if the button has multiple states
+				if(buttonStateCount[js.number] > 0) {  // Check if the button is a toggle or not
 
 					if(js.value == 1) {  // If it is a multi-state and this event is a button press, cycle through states
 
-						if(joystickState.button[js.number] < buttonStateCount[js.number]) {
+						if(joystickState->button[js.number] < buttonStateCount[js.number]) {
 
-							joystickState.button[js.number] = joystickState.button[js.number] + 1;	
+							joystickState->button[js.number] = joystickState->button[js.number] + 1;	
 
 						} else {
 
-							joystickState.button[js.number] = 0;  // Max state hit, zero out state
+							joystickState->button[js.number] = 0;  // Max state hit, zero out state
 
 						}
 
@@ -451,7 +444,7 @@ void readJoystick(int jsPort, struct jsState *_joystickState, int *_prevLeftThro
 
 				} else {
 
-					joystickState.button[js.number] = js.value;  // Normal button, switch to value from event
+					joystickState->button[js.number] = js.value;  // Normal button, switch to value from event
 
 				}
 
@@ -475,20 +468,20 @@ void readJoystick(int jsPort, struct jsState *_joystickState, int *_prevLeftThro
 
 					if(jsValue > 0) {  // Check if the joystick is in the "up" or "down" section of the axis
 
-						if(jsValue > prevLeftThrottle) {
+						if(jsValue > joystickState->prevLeftThrottle) {
 
-							joystickState.axis[js.number] = jsValue;  // Joystick is in the up section and has passed previous max throttles
-							prevLeftThrottle = jsValue;
+							joystickState->axis[js.number] = jsValue;  // Joystick is in the up section and has passed previous max throttles
+							joystickState->prevLeftThrottle = jsValue;
 
 						}
 
 					} else {
 
 						jsValue = jsValue + 32767;   // Since we inverted the axis, add the MAX_VAL to this
-						if(jsValue < prevLeftThrottle) {  // Joystick is in the down section and has passed the previous min throttle
+						if(jsValue < joystickState->prevLeftThrottle) {  // Joystick is in the down section and has passed the previous min throttle
 
-							joystickState.axis[js.number] = jsValue;
-							prevLeftThrottle = jsValue;
+							joystickState->axis[js.number] = jsValue;
+							joystickState->prevLeftThrottle = jsValue;
 
 						}
 
@@ -496,7 +489,7 @@ void readJoystick(int jsPort, struct jsState *_joystickState, int *_prevLeftThro
 					
 				} else {
 
-					joystickState.axis[js.number] = jsValue;  // Regular axis, just store the current value
+					joystickState->axis[js.number] = jsValue;  // Regular axis, just store the current value
 
 				}
 				break;
@@ -505,15 +498,11 @@ void readJoystick(int jsPort, struct jsState *_joystickState, int *_prevLeftThro
 
 		}
 
-		*_joystickState = joystickState;  // Save our mods to the pointer
-		*_prevLeftThrottle = prevLeftThrottle;
-		*_prevRightThrottle = prevRightThrottle;
-
 }
 
 /* translateJStoAF() - Translate current joystick settings to airframe settings (e.g. axis -> servos) */
 
-void translateJStoAF(struct jsState joystickState) {
+void translateJStoAF(jsState joystickState) {
 
 	int x;
 	if(joystickState.axis[ROLL] > 0) {
@@ -588,7 +577,7 @@ void translateJStoAF(struct jsState joystickState) {
 
 /* sendCtrlUpdate() - Send latest control state to XBee port */
 
-void sendCtrlUpdate (int signum) {
+void sendCtrlUpdate(int signum) {
 	
 	int x;
 	unsigned int checksum;
@@ -624,7 +613,7 @@ void sendCtrlUpdate (int signum) {
 
 		writePortMsg(xbeePort, "XBee", xbeeMsg, MSG_SIZE_CTRL);
 		#if DEBUG_LEVEL == 1
-		printf("CSLA: %3d/%3d\n", commandsSinceLastAck, CMDS_PER_ACK);
+		printf("CSLA: %3d/%3d\n", commandsSinceLastAck, debugCommandsPerAck);
 		#endif
 		commandsSinceLastAck++;
 	
@@ -674,14 +663,14 @@ void writePortMsg(int outputPort, char *portName, unsigned char *message, int me
 
 /* printState(axes) - Debug function, prints the current joystick and airframe states */
 
-void printState(struct jsState joystickState, int axes) {
+void printState(jsState joystickState) {
 
 	int i;
 	printf("\r");
 
-	if(axes) {
+	if(joystickState.axes) {
 	printf("Axes: ");
-	for (i = 0; i < axes ; i++)
+	for (i = 0; i < joystickState.axes ; i++)
 		printf("%2d:%6d ", i, joystickState.axis[i]);  // Print all joystick axes
 	}
 
@@ -705,7 +694,7 @@ void printState(struct jsState joystickState, int axes) {
 
 /* readConfig() - Read values from configuration file */
 
-int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile, char **joystickEventFile) {
+int readConfig(configValues *configInfo) {
 
 	FILE *fp;
 	int readCount = 0, lineBuffer = 1024;
@@ -722,9 +711,9 @@ int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile,
 		
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
 					
-					*xbeePortFile = calloc(strlen(line) + 1, sizeof(char));  // Allocate memory for our variable
-					strcpy(*xbeePortFile, line);                             // Copy value into our var
-					readCount++;                                            // Increment our value count
+					configInfo->xbeePortFile = calloc(strlen(line) + 1, sizeof(char)); // Allocate memory for our variable
+					strcpy(configInfo->xbeePortFile, line);                            // Copy value into our var
+					readCount++;                                                       // Increment our value count
 
 				}
 
@@ -732,8 +721,8 @@ int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile,
 
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
 
-					*ppzPortFile = calloc(strlen(line) + 1, sizeof(char));
-					strcpy(*ppzPortFile, line);
+					configInfo->ppzPortFile = calloc(strlen(line) + 1, sizeof(char));
+					strcpy(configInfo->ppzPortFile, line);
 					readCount++;
 
 				}
@@ -742,8 +731,8 @@ int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile,
 
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
 
-					*joystickPortFile = calloc(strlen(line) + 1, sizeof(char));
-					strcpy(*joystickPortFile, line);
+					configInfo->joystickPortFile = calloc(strlen(line) + 1, sizeof(char));
+					strcpy(configInfo->joystickPortFile, line);
 					readCount++;
 
 				}
@@ -752,12 +741,43 @@ int readConfig(char **xbeePortFile, char **ppzPortFile, char **joystickPortFile,
 
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
 
-					*joystickEventFile = calloc(strlen(line) + 1, sizeof(char));
-					strcpy(*joystickEventFile, line);
+					configInfo->joystickEventFile = calloc(strlen(line) + 1, sizeof(char));
+					strcpy(configInfo->joystickEventFile, line);
 					readCount++;
 
 				}
 
+			} else if(strcmp(line, "[Joystick Discard Threshold]") ==0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					configInfo->jsDiscardUnder = atoi(line); // Translate ASCII -> int
+					readCount++;
+
+				}
+
+			} else if(strcmp(line, "[PPM Interval]") ==0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					configInfo->ppmInterval = atoi(line); // Translate ASCII -> int
+					readCount++;
+
+				}
+
+			} else if(strcmp(line, "[Commands Per Ack]") ==0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					configInfo->commandsPerAck = atoi(line); // Translate ASCII -> int
+					readCount++;
+
+				}
+
+			} else if(strcmp(line, "[Button State Count]") ==0) {
+
+					// TODO
+	
 			}
 
 		}
@@ -1004,7 +1024,7 @@ void processMessage(unsigned char *message, int length) {
 		handShook = 1;
 		commandsSinceLastAck = 0;
 		#if DEBUG_LEVEL == 1
-		printf("CSLA: %3d/%3d\n", commandsSinceLastAck, CMDS_PER_ACK);
+		printf("CSLA: %3d/%3d\n", commandsSinceLastAck, debugCommandsPerAck);
 		#endif
 
 	} else if(msgType == MSG_TYPE_CTRL) { // We shouldn't get this from the Arduino
@@ -1016,9 +1036,9 @@ void processMessage(unsigned char *message, int length) {
 
 /* checkSignal() - Check whether the signal is good, if not RUMBLE!! */
 
-void checkSignal() {
+void checkSignal(int commandsPerAck) {
 
-	if(commandsSinceLastAck > CMDS_PER_ACK) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
+	if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
 		handShook = 0;  // Turn off handshake so we can resync
 		printf("Lost signal!  Attempting to resync.\n");

@@ -1,5 +1,5 @@
 [XBee Port File]
-/dev/ttyXBee
+/dev/ttyS0
 [PPZ Port File]
 /dev/ttyUSB1
 [Joystick Port File]
