@@ -286,7 +286,7 @@ int main (int argc, char **argv)
 	
 	}
 
-	free(inMsg);
+	free(xbeeMsg.messageBuffer);
 	return 0;
 
 }
@@ -636,7 +636,7 @@ void sendCtrlUpdate (int signum) {
 
 		// Random length
 		unsigned char *handshakeMsg;
-		int msgSize = 10 + (rand % 20); // Handshake message is random size between 10 and 30
+		int msgSize = 10 + (rand() % 20); // Handshake message is random size between 10 and 30
 
 		handshakeMsg = calloc(msgSize, sizeof(char)); // Allocate memory for handshakeMsg
 
@@ -644,7 +644,7 @@ void sendCtrlUpdate (int signum) {
 		handshakeMsg[1] = MSG_TYPE_SYNC;
 		handshakeMsg[2] = msgSize;
 		handshakeMsg[3] = generateChecksum(handshakeMsg, MSG_HEADER_SIZE - 1);
-		for(x = MSG_HEADER_SIZE ; x < msgSize ; x++) 
+		for(x = MSG_HEADER_SIZE ; x < msgSize ; x++) {
 
 			handshakeMsg[x] = rand() % 254;  // Build the random data portion of the handshake message
 		
@@ -816,16 +816,15 @@ char *fgetsNoNewline(char *s, int n, FILE *stream) {
 int checkMessages(int msgPort, messageState *msg) {
 
 	unsigned char testByte = 0x00;
-
 	
 	if(msg->readBytes == MSG_HEADER_SIZE) {
 
 		int x;	
 		// Finished reading the message header, check it
-		if(testChecksum(msg->messageBuffer, readBytes)) { // Checksum was good
+		if(testChecksum(msg->messageBuffer, msg->readBytes)) { // Checksum was good
 
 	
-			msg->length = messageBuffer[2];  // 0 - MSG_BEGIN, 1 - MSG_TYPE, 2 - MSG_LENGTH
+			msg->length = msg->messageBuffer[2];  // 0 - MSG_BEGIN, 1 - MSG_TYPE, 2 - MSG_LENGTH
 
 
 		} else {			
@@ -846,12 +845,11 @@ int checkMessages(int msgPort, messageState *msg) {
 
 		if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
 
-			int x;
 			#if DEBUG_LEVEL == 1
 			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x", msg->readMsgBytes, msg->msgWaitingBytes, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
 			#endif		
 
-			msg->messageBuffer[readBytes] = testByte; // Add the new byte to our message buffer
+			msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
 			msg->readBytes++;			  // Increment readBytes
 
 			return 1;
@@ -864,7 +862,7 @@ int checkMessages(int msgPort, messageState *msg) {
 
 	} else { // Message is finished, process it
 
-		if(testChecksum(msg->messageBuffer, msg->length) { // Checksum passed, process message..  If the checksum failed we can assume corruption elsewhere since the header was legit
+		if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  If the checksum failed we can assume corruption elsewhere since the header was legit
 
 			processMessage(msg->messageBuffer, msg->length);
 
@@ -880,6 +878,8 @@ int checkMessages(int msgPort, messageState *msg) {
 		}
 		msg->readBytes = 0;            // Zero out readBytes
 		msg->length = MSG_HEADER_SIZE; // Set message length to header length
+		
+		return 1;
 
 	}
 
