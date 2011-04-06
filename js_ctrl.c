@@ -126,7 +126,7 @@ Adruino:
 
 /* Structures */
 
-typedef struct s_jsState {  // Store the axis and button states globally accessible
+typedef struct _jsState {  // Store the axis and button states globally accessible
 	int *axis;
 	char *button;
 	int prevLeftThrottle;
@@ -135,14 +135,14 @@ typedef struct s_jsState {  // Store the axis and button states globally accessi
 	unsigned char buttons;
 } jsState;
 
-typedef struct s_afState { // Store the translated (servo + buttons) states, globally accessible
+typedef struct _afState { // Store the translated (servo + buttons) states, globally accessible
 
 	unsigned int servos[SERVO_COUNT];
 	unsigned int buttons[BUTTON_COUNT];
 
 } afState;
 
-typedef struct s_configValues {
+typedef struct _configValues {
 
 	char *joystickEventFile; // joystickEvent filename (for RUMBLE!)
 	char *joystickPortFile;  // joystickPort filename
