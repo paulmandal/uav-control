@@ -64,16 +64,12 @@ Adruino:
 #define VERSION_MINOR 8       // Minor #
 #define VERSION_MOD   0       // Mod #
 
-#define MSG_SIZE_CTRL 14      // Length of control update messages
-#define MSG_SIZE_SYNC 14      // Length of sync messages
-#define MSG_SIZE_PPZ  64      // Length of message from PPZ
-#define MSG_SIZE_CFG  64      // Length of configuration message
 #define MSG_BEGIN     0xFF    // Begin of control message indicator byte
 #define MSG_TYPE_CTRL 0x01    // Control update message type indicator
 #define MSG_TYPE_CFG  0x02    // Configuration update
 #define MSG_TYPE_PPZ  0x03    // Message from PPZ
 #define MSG_TYPE_SYNC 0xFE    // Sync message type indicator
-#define MSG_BUFFER_SIZE 128   // Message buffer size in bytes
+#define MSG_BUFFER_SIZE 256   // Message buffer size in bytes
 #define CMDS_PER_ACK  60      // Assume lost signal if we send this many commands without an ack
 
 #define NAME_LENGTH 128       // Length of Joystick name
@@ -143,6 +139,8 @@ struct afState { // Store the translated (servo + buttons) states, globally acce
 	unsigned int buttons[BUTTON_COUNT];
 
 };
+
+typedef _
 
 /* Let's do sum prototypes! */
 
