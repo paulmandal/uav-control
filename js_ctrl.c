@@ -70,6 +70,7 @@ Adruino:
 #define MSG_TYPE_PPZ  0x03    // Message from PPZ
 #define MSG_TYPE_SYNC 0xFE    // Sync message type indicator
 #define MSG_BUFFER_SIZE 256   // Message buffer size in bytes
+#define MSG_HEADER_SIZE 4     // Message header size in bytes
 #define CMDS_PER_ACK  60      // Assume lost signal if we send this many commands without an ack
 
 #define NAME_LENGTH 128       // Length of Joystick name
@@ -140,7 +141,13 @@ struct afState { // Store the translated (servo + buttons) states, globally acce
 
 };
 
-typedef _
+typedef struct _messageState {
+
+	unsigned char *messageBuffer;
+	int readBytes;
+	int length;
+
+} messageState;
 
 /* Let's do sum prototypes! */
 
@@ -156,8 +163,9 @@ void printState(struct jsState joystickState, int axes);
 void initAirframe();
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
-int checkMessages(unsigned char **_inMsg, int *_gotMsgBegin, int *_gotMsgType, int *_readMsgBytes, int *_msgWaitingBytes);
-int testMessage(unsigned char *message, int length);
+int checkMessages(int msgPort, messageState *msg);
+int testChecksum(unsigned char *message, int length);
+unsigned char generateChecksum(unsigned char *message, int length);
 void checkSignal();
 void processMessage(unsigned char *message, int length);
 
@@ -192,19 +200,17 @@ int main (int argc, char **argv)
 	char *xbeePortFile = NULL;            // xbeePort filename
 	char *ppzPortFile = NULL;             // ppzPort filename
 	struct jsState joystickState;         // Current joystick state
-	unsigned char *inMsg;                 // Incoming message buffer
 	unsigned char axes = 2;               // Joystick axes
 	unsigned char buttons = 2;	      // Joystick buttons
-	int msgWaitingBytes = 1;              // Message waiting byte count
-	int readMsgBytes = 0;	              // How many bytes we've read so far
-	int gotMsgBegin = 0;                  // Mark whether or not we're currently reading a message
-	int gotMsgType = 0;                   // Mark whether we have a message type
+	messageState xbeeMsg;		      // messageState for incoming XBee message
+
+	xbeeMsg.messageBuffer = calloc(MSG_BUFFER_SIZE, sizeof(char));
+	xbeeMsg.readBytes = 0;
+	xbeeMsg.length = MSG_HEADER_SIZE; // Init message.length as header length size
 
 	printf("Starting js_crl version %d.%d.%d...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Print version information
 
 	srand(time(NULL));  // Init random using current time
-
-	inMsg = calloc(MSG_BUFFER_SIZE, sizeof(char));  // Allocate memory for our message buffer
 	
 	if(readConfig(&xbeePortFile, &ppzPortFile, &joystickPortFile, &joystickEventFile) < 0) { // Read our config into our config vars
 
@@ -246,7 +252,7 @@ int main (int argc, char **argv)
 
 			while(!handShook) {  // Handshaking loop
 
-				if(!checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes)) { // Check for pending msg bytes
+				if(!checkMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
 
 					usleep(100); // If nothing is there pause for 100usec, handshake is sent out by interrupt at 50Hz
 
@@ -267,11 +273,11 @@ int main (int argc, char **argv)
 		#endif
 		
 		int x;
-		for(x = 0 ; x < MSG_SIZE_SYNC ; x++) {  // Try to read MSG_SIZE_SYNC bytes per loop
+		for(x = 0 ; x < 10 ; x++) {  // Try to read 10 bytes per loop
 
-			if(!checkMessages(&inMsg, &gotMsgBegin, &gotMsgType, &readMsgBytes, &msgWaitingBytes)) { // Check for pending msg bytes
+			if(!checkMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
 
-				usleep(71); // If there was nothing pending pause for 71usec, max pause per loop is MSG_SIZE_SYNC * 71usec = 994usec, a little less than 1ms
+				usleep(100); // If there was nothing pending pause for 100usec, max pause per loop is 1,000usec = 1ms
 			};  
 
 		}
@@ -589,38 +595,38 @@ void translateJStoAF(struct jsState joystickState) {
 void sendCtrlUpdate (int signum) {
 	
 	int x;
-	unsigned int checksum;
 
 	if(handShook) {	// We're synced up, send a control update
 
-		unsigned char xbeeMsg[MSG_SIZE_CTRL];
+		int msgSize = MSG_HEADER_SIZE + SERVO_COUNT + 3 + 1; // MSG_HEADER_SIZE + 1 byte per servo + 3 bytes buttons + 1 checksum byte
+		int buttonOffset = MSG_HEADER_SIZE + SERVO_COUNT;
+		unsigned char *xbeeMsg;
+
+		xbeeMsg = calloc(msgSize, sizeof(char)); // Allocate memory for our message
 
 		xbeeMsg[0] = MSG_BEGIN;      // First character of xbeeMsg is MSG_BEGIN
 		xbeeMsg[1] = MSG_TYPE_CTRL;  // Message type = control
+		xbeeMsg[2] = msgSize;  // Message length = MSG_SIZE_CTRL
+		xbeeMsg[3] = generateChecksum(xbeeMsg, MSG_HEADER_SIZE - 1); // Generate and store checksum
 		for(x = 0 ; x < SERVO_COUNT ; x++) {
 
-			xbeeMsg[x + 2] = (unsigned char)airframeState.servos[x];  // Next 8 bytes are servo states
+			xbeeMsg[x + MSG_HEADER_SIZE] = (unsigned char)airframeState.servos[x];  // Next 8 bytes are servo states
 
 		}
 
 		for(x = 0 ; x < 3 ; x++) {  // Next 3 bytes are 12 buttons, 2 bits per button
 
-			xbeeMsg[x + 10] = (airframeState.buttons[(x * 4)] & 3) << 6;                       // Mask away anything but the last 2 bits and then bitshift to the left
-			xbeeMsg[x + 10] = xbeeMsg[x + 10] | (airframeState.buttons[(x * 4) + 1] & 3) << 4;  // Mask away same, bitshift 4 to the left and bitwise OR to add this to our byte
-			xbeeMsg[x + 10] = xbeeMsg[x + 10] | (airframeState.buttons[(x * 4) + 2] & 3) << 2;  // Same
-			xbeeMsg[x + 10] = xbeeMsg[x + 10] | (airframeState.buttons[(x * 4) + 3] & 3);       // Same, no bitshift since we're already on the last two bits
+			xbeeMsg[x + buttonOffset] = (airframeState.buttons[(x * 4)] & 3) << 6;                       // Mask away anything but the last 2 bits and then bitshift to the left
+			xbeeMsg[x + buttonOffset] = xbeeMsg[x + buttonOffset] | (airframeState.buttons[(x * 4) + 1] & 3) << 4;  // Mask away same, bitshift 4 to the left and bitwise OR to add this to our byte
+			xbeeMsg[x + buttonOffset] = xbeeMsg[x + buttonOffset] | (airframeState.buttons[(x * 4) + 2] & 3) << 2;  // Same
+			xbeeMsg[x + buttonOffset] = xbeeMsg[x + buttonOffset] | (airframeState.buttons[(x * 4) + 3] & 3);       // Same, no bitshift since we're already on the last two bits
 
 		}
 
-		checksum = 0x00;
-		for(x = 0 ; x < (MSG_SIZE_CTRL - 1); x++) {
+		xbeeMsg[msgSize - 1] = generateChecksum(xbeeMsg, msgSize - 1); // Store our checksum as our last byte
 
-			checksum = checksum ^ (unsigned int)xbeeMsg[x]; // Generate checksum
-
-		}
-		xbeeMsg[MSG_SIZE_CTRL - 1] = (unsigned char)checksum & 0xFF; // Last byte is checksum
-
-		writePortMsg(xbeePort, "XBee", xbeeMsg, MSG_SIZE_CTRL);
+		writePortMsg(xbeePort, "XBee", xbeeMsg, msgSize); // Write out message to XBee
+		free(xbeeMsg); // Deallocate memory for xbeeMsg
 		#if DEBUG_LEVEL == 1
 		printf("CSLA: %3d/%3d\n", commandsSinceLastAck, CMDS_PER_ACK);
 		#endif
@@ -628,29 +634,30 @@ void sendCtrlUpdate (int signum) {
 	
 	} else {  // We aren't synced up, send sync msg
 
-		unsigned char handshakeMsg[MSG_SIZE_SYNC];
+		// Random length
+		unsigned char *handshakeMsg;
+		int msgSize = 10 + (rand % 20); // Handshake message is random size between 10 and 30
+
+		handshakeMsg = calloc(msgSize, sizeof(char)); // Allocate memory for handshakeMsg
+
 		handshakeMsg[0] = MSG_BEGIN;
 		handshakeMsg[1] = MSG_TYPE_SYNC;
-		for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
+		handshakeMsg[2] = msgSize;
+		handshakeMsg[3] = generateChecksum(handshakeMsg, MSG_HEADER_SIZE - 1);
+		for(x = MSG_HEADER_SIZE ; x < msgSize ; x++) 
 
-			handshakeMsg[x] = rand() % 254;  // Build the handshake msg, it is MSG_BEGIN + MSG_TYPE_SYNC + random characters + checksum
+			handshakeMsg[x] = rand() % 254;  // Build the random data portion of the handshake message
 		
 		}
 
-		checksum = 0x00;
-		for(x = 0 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
-
-			checksum = checksum ^ (unsigned int)handshakeMsg[x];  // Build the checksum
-
-		}
-
-		handshakeMsg[MSG_SIZE_SYNC - 1] = (unsigned char)checksum & 0xFF;  // Store the checksum
+		handshakeMsg[msgSize - 1] = generateChecksum(handshakeMsg, msgSize - 1); // Store our checksum as the last byte
 
 		#if DEBUG_LEVEL == 0
 		printf(".");
 		#endif
 		fflush(stdout);
-		writePortMsg(xbeePort, "XBee", handshakeMsg, MSG_SIZE_SYNC);  // Write the handshake to the XBee port
+		writePortMsg(xbeePort, "XBee", handshakeMsg, msgSize);  // Write the handshake to the XBee port
+		free(handshakeMsg); // De-allocate memory for handshakeMsg
 
 	}
 }
@@ -806,155 +813,81 @@ char *fgetsNoNewline(char *s, int n, FILE *stream) {
 
 /* checkMessages() - Check for and handle any incoming messages */
 
-int checkMessages(unsigned char **_inMsg, int *_gotMsgBegin, int *_gotMsgType, int *_readMsgBytes, int *_msgWaitingBytes) {
+int checkMessages(int msgPort, messageState *msg) {
 
 	unsigned char testByte = 0x00;
 
-	if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
-
-		int x;
-		unsigned char *inMsg;                     // Incoming message buffer
-		int msgWaitingBytes = *_msgWaitingBytes;  // Message waiting byte count
-		int readMsgBytes = *_readMsgBytes;	  // How many bytes we've read so far
-		int gotMsgBegin = *_gotMsgBegin;          // Mark whether or not we're currently reading a message
-		int gotMsgType = *_gotMsgType;            // Mark whether we have a message type
-		inMsg = calloc(MSG_BUFFER_SIZE, sizeof(char));  // Allocate memory for our temporary buffer
-
-		#if DEBUG_LEVEL == 1
-		printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x", readMsgBytes, msgWaitingBytes, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
-		#endif		
-
-		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
 	
-			inMsg[x] = *(*_inMsg + x);
+	if(msg->readBytes == MSG_HEADER_SIZE) {
+
+		int x;	
+		// Finished reading the message header, check it
+		if(testChecksum(msg->messageBuffer, readBytes)) { // Checksum was good
+
 	
-		}
+			msg->length = messageBuffer[2];  // 0 - MSG_BEGIN, 1 - MSG_TYPE, 2 - MSG_LENGTH
 
-		if(!gotMsgBegin) { // We're waiting for a message begin marker, so check for one
 
-			if(testByte == MSG_BEGIN) {  // Found a message begin marker
+		} else {			
 
-				#if DEBUG_LEVEL == 1
-				printf("  MESSAGE BEGIN\n"); // Print the byte type	
-				#endif		
+			for(x = 0 ; x < (MSG_HEADER_SIZE - 1) ; x++) { // Shift all message characters to the left, drop the first one
 
-				inMsg[0] = testByte;
-				gotMsgBegin = 1;
-				readMsgBytes = 1;
-				msgWaitingBytes = 2;
-			} 
-			#if DEBUG_LEVEL == 1
-			else {// Discard useless byte 
-				
-				printf("  JUNK BYTE\n"); // Print the byte type
+				msg->messageBuffer[x] = msg->messageBuffer[x + 1];
 
 			}
-			#endif
 
-		} else if(!gotMsgType) {  // We're waiting for a message type marker, grab this one
+			msg->readBytes--; // Decrement byte count and chuck the first byte, this will allow us to reprocess the other 3 bytes in case we are desynched with the message sender
 
+		}
+
+	} 
+
+	if(msg->readBytes < msg->length) { // Message is not finished being read
+
+		if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
+
+			int x;
 			#if DEBUG_LEVEL == 1
-			printf("  MESSAGE TYPE"); // Print the byte type	
+			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x", msg->readMsgBytes, msg->msgWaitingBytes, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
 			#endif		
 
-			inMsg[1] = testByte;
-			gotMsgType = 1;
-			readMsgBytes = 2;						
+			msg->messageBuffer[readBytes] = testByte; // Add the new byte to our message buffer
+			msg->readBytes++;			  // Increment readBytes
 
-			if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
+			return 1;
 
-				#if DEBUG_LEVEL == 1
-				printf(" - SYNC\n"); // Print the message type	
-				#endif		
-				msgWaitingBytes = MSG_SIZE_SYNC;  
+		} else {
 
-			} else if(testByte == MSG_TYPE_CTRL) {
-
-				#if DEBUG_LEVEL == 1
-				printf(" - CTRL\n"); // Print the message type		
-				#endif	
-
-				msgWaitingBytes = MSG_SIZE_CTRL;
-
-			} else if(testByte == MSG_TYPE_PPZ) {
-
-				#if DEBUG_LEVEL == 1
-				printf(" - PPZ\n"); // Print the message type	
-				#endif	
-
-				msgWaitingBytes = MSG_SIZE_PPZ;
-
-			} else if(testByte == MSG_TYPE_CFG) {
-
-				#if DEBUG_LEVEL == 1
-				printf(" - CFG\n"); // Print the message type		
-				#endif	
-
-				msgWaitingBytes = MSG_SIZE_CFG;
-	
-			} else { // Not a valid message type?  Ignore this garbage
-
-				#if DEBUG_LEVEL == 1
-				printf(" - INVALID\n"); // Print the message type		
-				#endif	
-
-				gotMsgBegin = 0;  // Get ready for our next message
-				gotMsgType = 0;
-				msgWaitingBytes = 1;
-				readMsgBytes = 0;
-			}
-
-		} else { // We have our msgBegin and msgType markers, read the rest of the message into our buffer and handle it
-
-			#if DEBUG_LEVEL == 1
-			printf("  DATA\n"); // Print the message type		
-			#endif	
-
-			inMsg[readMsgBytes] = testByte;
-			readMsgBytes++;
-
-			if(readMsgBytes >= msgWaitingBytes) { // Have we finished reading the entire message?
-
-				if(testMessage(inMsg, msgWaitingBytes)) {  // Test the message checksum
-
-					processMessage(inMsg, msgWaitingBytes); // Execute or process the message
-
-				} 
-
-				gotMsgBegin = 0;  // Get ready to read our next message
-				gotMsgType = 0;
-				msgWaitingBytes = 1;
-				readMsgBytes = 0;
-
-			}
+ 			return 0;
 
 		}
 
+	} else { // Message is finished, process it
+
+		if(testChecksum(msg->messageBuffer, msg->length) { // Checksum passed, process message..  If the checksum failed we can assume corruption elsewhere since the header was legit
+
+			processMessage(msg->messageBuffer, msg->length);
+
+		} 
+
+		int x;	
+
+		// Clear out message so it's ready to be used again	
 		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
-	
-			*(*_inMsg+x) = inMsg[x];		// Write message buffer back to its pointer
+
+			msg->messageBuffer[x] = '\0';
 
 		}
-
-		*_msgWaitingBytes = msgWaitingBytes; 	// Write values back to their pointars
-		*_readMsgBytes = readMsgBytes;	              
-		*_gotMsgBegin = gotMsgBegin;                 
-		*_gotMsgType = gotMsgType;
-
-		free(inMsg);
-		return 1;
-
-	} else {
-
-		return 0;
+		msg->readBytes = 0;            // Zero out readBytes
+		msg->length = MSG_HEADER_SIZE; // Set message length to header length
 
 	}
 
 }
 
-/* testMessage(message, length) - Test if the last byte checksum is good */
+/* testChecksum(message, length) - Test if the last byte checksum is good */
 
-int testMessage(unsigned char *message, int length) {
+int testChecksum(unsigned char *message, int length) {
 
 	unsigned int checksum = 0x00;
 	int x;
@@ -988,6 +921,23 @@ int testMessage(unsigned char *message, int length) {
 		return 0;
 
 	}
+
+}
+
+/* generateChecksum(message, length) - Generate a checksum for message */
+
+unsigned char generateChecksum(unsigned char *message, int length) {
+
+	unsigned int checksum = 0x00;
+	int x;
+
+	for(x = 0 ; x < length ; x++) {
+
+		checksum = checksum ^ (unsigned int)message[x]; // Generate checksum
+
+	}
+
+	return checksum;
 
 }
 
