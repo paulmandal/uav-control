@@ -61,8 +61,8 @@ Adruino:
 			      // Debug level - 2 - Debug joystick position info
 
 #define VERSION_MAJOR 2       // Version information, Major #
-#define VERSION_MINOR 8       // Minor #
-#define VERSION_MOD   0       // Mod #
+#define VERSION_MINOR 9       // Minor #
+#define VERSION_MOD   1       // Mod #
 
 #define MSG_SIZE_CTRL 14      // Length of control update messages
 #define MSG_SIZE_SYNC 14      // Length of sync messages
@@ -122,7 +122,7 @@ Adruino:
 #define SRV_CAM_TILT 7
 
 #define CONFIG_FILE "js_ctrl.rc"  // Config file name
-#define CONFIG_FILE_MIN_COUNT 4   // # of variables stored in config file 
+#define CONFIG_FILE_MIN_COUNT 8   // # of variables stored in config file 
 
 /* Structures */
 
@@ -776,20 +776,50 @@ int readConfig(configValues *configInfo) {
 			} else if(strcmp(line, "[Button State Count]") ==0) {
 
 
-				configInfo->buttonStateCount = calloc(12,sizeof(int));
-				configInfo->buttonStateCount[0] = 0;
-				configInfo->buttonStateCount[1] = 0;
-				configInfo->buttonStateCount[2] = 0;
-				configInfo->buttonStateCount[3] = 0;
-				configInfo->buttonStateCount[4] = 0;
-				configInfo->buttonStateCount[5] = 0;
-				configInfo->buttonStateCount[6] = 0;
-				configInfo->buttonStateCount[7] = 0;
-				configInfo->buttonStateCount[8] = 0;
-				configInfo->buttonStateCount[9] = 0;
-				configInfo->buttonStateCount[10] = 0;
-				configInfo->buttonStateCount[11] = 0;
-					// TODO
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					int bufferPos, currButton, strPos, buttonCount = 0;
+					char buttonBuffer[4]; // More than 3 digits of a button state is a bit ridiculous
+					int lineLength = strlen(line);
+					for(strPos = 0 ; strPos < lineLength ; strPos++) { // Iterate through line[] character by character to get the button count
+
+						if(line[strPos] == ',') { // Each comma separates a button state count so totalling them should get us our button count
+
+							buttonCount++;
+
+						}
+					}
+
+					configInfo->buttonStateCount = calloc(buttonCount, sizeof(int)); // Allocate memory for our button state counts
+
+					currButton = 0;
+					strPos = 0;
+
+					while(currButton < buttonCount && strPos < lineLength) {  // Keep reading button states while we have lineLength left and buttonCount to meet
+
+						for(bufferPos = 0 ; bufferPos < 4 ; bufferPos++) {
+
+							buttonBuffer[bufferPos] = '\0'; // Null out buttonBuffer
+
+						}
+
+						bufferPos = 0;
+
+						while(line[strPos] != ',') {
+
+							buttonBuffer[bufferPos] = line[strPos];
+							bufferPos++;
+							strPos++;
+
+						}
+
+						strPos++; // Increment past the last comma
+
+						configInfo->buttonStateCount[currButton] = atoi(buttonBuffer);
+
+					}
+					
+				}
 	
 			}
 
