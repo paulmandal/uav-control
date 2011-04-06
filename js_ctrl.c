@@ -12,17 +12,13 @@
 
 TODO:
 
-- Move all values to config file
-- Write config msg updater
 - DPad -> servo control
 - Relay PPZ -> UAV
 - Relay UAV -> PPZ
 - Force feedback on RSSI weak/loss
-- Better/propermessage handling, PPZ and Arduino
 
 Adruino:
 
-- Move all config values to EEPROM
 - Handle config updates via msg
 - Improve message handling, PPZ and JS
 - Handle digital pins/buttons
@@ -62,7 +58,7 @@ Adruino:
 
 #define VERSION_MAJOR 2       // Version information, Major #
 #define VERSION_MINOR 9       // Minor #
-#define VERSION_MOD   1       // Mod #
+#define VERSION_MOD   2       // Mod #
 
 #define MSG_BEGIN     0xFF    // Begin of control message indicator byte
 #define MSG_TYPE_CTRL 0x01    // Control update message type indicator
@@ -212,11 +208,6 @@ int main (int argc, char **argv)
 	int jsPort;  // JoystickPort FD
 	jsState joystickState;                // Current joystick state
 	configValues configInfo;   	      // Configuration values
-	char *joystickEventFile = NULL;       // joystickEvent filename (for RUMBLE!)
-	char *joystickPortFile = NULL;        // joystickPort filename
-	char *xbeePortFile = NULL;            // xbeePort filename
-	char *ppzPortFile = NULL;             // ppzPort filename
-	struct jsState joystickState;         // Current joystick state
 	messageState xbeeMsg;		      // messageState for incoming XBee message
 
 	xbeeMsg.messageBuffer = calloc(MSG_BUFFER_SIZE, sizeof(char));
