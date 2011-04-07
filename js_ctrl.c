@@ -662,6 +662,17 @@ void sendCtrlUpdate (int signum) {
 	}
 }
 
+
+/* initMessage() - Initialise message */
+
+void initMessage(messageState *message) {
+
+	message->messageBuffer = calloc(MSG_BUFFER_SIZE, sizeof(char));
+	message->readBytes = 0;
+	message->length = MSG_HEADER_SIZE; // Init message.length as header length size
+	
+}
+
 /* writePortMsg(outputPort, portName, message, messageSize) - Write message to outputPort, deliver error if message fails to write */
 
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize) {
