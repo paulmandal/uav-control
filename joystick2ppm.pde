@@ -121,7 +121,7 @@ void setup() {
   initMessage(xbeeMsg);      // Init our message header
   Serial.begin(115200);      // Open XBee/GCS Serial
   Serial.flush();
-  #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 2 || DEBUG_LEVEL == 4 || DEBUG_LEVEL == 5
+  #if DEBUG_LEVEL > 0
   Serial1.begin(115200);      // Open PPZ port as debug
   Serial1.println();  // Give us a little space in the output terminal / monitor
   Serial1.println();
@@ -146,9 +146,17 @@ void setup() {
 
 void loop() {
 
+  int x;
   updateStatusLED();        // Check if we need to toggle the status LED
   updateNavigationLights(); // Update Navigation lights
   checkMessages(xbeeMsg);          // Check for incoming messages
+
+  for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessages() should be run with a much higher frequency than the LED updates or checkSignal()
+  
+    checkMessages();          // Check for incoming messages
+
+  }
+
   checkSignal();            // Check if the signal is still good
 
 }
@@ -364,19 +372,33 @@ void checkSignal() {
 
     if(!lostSignal) {
       
-      #if DEBUG_LEVEL == 1
-      Serial1.println("Lost signal due to lastMsgTime timeout!");
-      #endif
+      cli(); // Do not allow timer ppm disabling to be interrupted
       lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
       ppmON = false;                                   // Disable PPM
       DDRD  &= B11011111;                              // Disable output on OC1A
       TIMSK1 = B00000000;                              // Disable interrupt on compare match
       TCCR1A = B00000000;                              // Disable fast PWM
       TCCR1B = B00000000;                              // Disable fast PWM, clock, and prescaler
+      #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 3
+      Serial1.println("Lost signal due to lastMsgTime timeout!");
+      #endif
+      #if DEBUG_LEVEL == 3
+      Serial1.print("commandsSinceLastAck: ");
+      Serial1.print(commandsSinceLastAck);
+      Serial1.print("currentTime: ");
+      Serial1.print(currentTime);
+      Serial1.print("lastMsgTime: ");
+      Serial1.print(lastMsgTime);
+      Serial1.print("diff: ");
+      Serial1.print(currentTime - lastMsgTime);
+      Serial1.print(" > ");
+      Serial1.println(LOST_MSG_THRESHOLD);
+      #endif
       statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
       #if DEBUG_LEVEL == 3
       digitalWrite(DEBUG_PIN1, HIGH);
       #endif
+      sei(); // Re-enable interrupts
       
     }
 
@@ -384,14 +406,17 @@ void checkSignal() {
     
     if(!ppmON) {  // Restart PPM since it was off
 
-        #if DEBUG_LEVEL == 1
-        Serial1.println("Restarting PPM");
+        cli();  // This shouldn't get interrupted since PPM is off but just to be safe..
+
+        #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 3
+        Serial1.println("Restarting PPM, lostSignal = false");
         #endif        
 
         DDRD  |= B00100000;                     // Enable output on OC1A
         TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A        
 
-    	ppmON = true;                           
+    	ppmON = true; 
+	TCNT1 = 0;				// Zero out counter, shouldn't matter but just in case                          
         OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
 	currentPulse = 1;                       // Set currentPulse to 1 since there will be no ISR() call to increment it
 
@@ -403,6 +428,7 @@ void checkSignal() {
         TCCR1A = B01000011;                     // Fast PWM mode, will generate ISR() when it reaches OCR1A (pulse[0]), thus starting the PPM signal
         TCCR1B = B00011010;                     // Fast PWM, plus 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)
 	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+        sei(); // Re-enable interrupts
     
     }
     
