@@ -375,7 +375,7 @@ int openJoystick(char *portName, jsState *joystickState) {
 int readConfig(configValues *configInfo) {
 
 	FILE *fp;
-	int readCount = 0, lineBuffer = 1024;
+	int x, readCount = 0, lineBuffer = 1024;
 	char line[lineBuffer];
 	if ((fp = fopen(CONFIG_FILE, "r")) == NULL) {  // Open the config file read-only
 		
@@ -495,6 +495,7 @@ int readConfig(configValues *configInfo) {
 						strPos++; // Increment past the last comma
 
 						configInfo->buttonStateCount[currButton] = atoi(buttonBuffer);
+						currButton++;
 
 					}
 					
@@ -516,6 +517,15 @@ int readConfig(configValues *configInfo) {
 	printf("               PPM Interval: %7d\n", configInfo->ppmInterval);
 	printf("           Commands Per Ack: %7d\n", configInfo->commandsPerAck);
 	printf("         Button State Count: \n\n");
+	
+	for(x = 0 ; x < buttonCount ; x++) {
+	
+		printf("%2d: %2d	", x + 1, configInfo->buttonStateCount[x]);
+		if(x % 4 == 0) {
+			printf("\n");
+		}
+	
+	}
 
 	if(readCount >= CONFIG_FILE_MIN_COUNT) {
 
