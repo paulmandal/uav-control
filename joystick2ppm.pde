@@ -27,20 +27,16 @@
                      
 
 #define VERSION_MAJOR 2     // Major version #
-#define VERSION_MINOR 8     // Minor #
-#define VERSION_MOD   0     // Mod #
+#define VERSION_MINOR 9     // Minor #
+#define VERSION_MOD   3     // Mod #
 
-#define MSG_SIZE_CTRL 14                      // Length of control update messages
-#define MSG_SIZE_SYNC 14		      // Length of sync messages
-#define MSG_SIZE_PPZ  64                      // Length of message from PPZ
-#define MSG_SIZE_CFG  64		      // Length of configuration message
 #define MSG_BEGIN     0xFF                    // Begin of control message indicator byte
 #define MSG_TYPE_CTRL 0x01                    // Control update message type indicator
 #define MSG_TYPE_CFG  0x02		      // Configuration update
 #define MSG_TYPE_PPZ  0x03                    // Message from PPZ
 #define MSG_TYPE_SYNC 0xFE                    // Sync message type indicator
-#define MSG_BUFFER_SIZE 128 		      // Message buffer size in bytes
-#define MSG_MIN_READ_INTERVAL 1               // 1ms per message byte because Serial.available() lies and gives us old bytes! :(
+#define MSG_BUFFER_SIZE 256 		      // Message buffer size in bytes
+#define MSG_HEADER_SIZE 4     		      // Message header size in bytes
 #define CMDS_PER_ACK  50                      // Client will assume lost signal if we send this many commands without an ack
 #define MSG_INTERVAL  20                      // Control message update interval (20ms)
 #define LOST_MSG_THRESHOLD (MSG_INTERVAL * 3) // How long without legit msg before lostSignal gets set
@@ -62,6 +58,17 @@
 
 #define NAVLIGHT_PIN 18                 // Navigation light pin
 #define NAVLIGHT_INTERVAL 1000          // Toggle every 1s
+
+/* Structures */
+
+struct messageState {
+
+	unsigned char *messageBuffer;
+	int readBytes;
+	int length;
+
+};
+
 /* Various varibles to hold state info */
 
 unsigned int servos[SERVO_COUNT];        // store servo states
@@ -83,11 +90,7 @@ volatile byte currentPulse = 0;        // The pulse being sent
 boolean  ppmON = false;
 unsigned int pulses[PPM_PULSES];        // PPM pulses
 
-unsigned char inMsg[MSG_BUFFER_SIZE];    // Incoming message buffer
-int msgWaitingBytes = 0;     // Message waiting byte count
-int msgReadBytes = 0;
-boolean gotMsgBegin = false; // Mark whether or not we're currently reading a message
-boolean gotMsgType = false;  // Mark whether we have a message type
+messageState xbeeMsg;
 
 int commandsSinceLastAck = 0;
 
@@ -96,9 +99,10 @@ int commandsSinceLastAck = 0;
 void initControlState();
 void initPPM();
 void initOutputs();
+boolean initMessage(messageState message);
 void updateStatusLED();
 void updateNavigationLights();
-void checkMessages();
+boolean checkMessages(messageState msg);
 boolean testMessage(unsigned char *message, int length);
 void processMessage(unsigned char *message, int length);
 void checkSignal();
@@ -114,6 +118,7 @@ void setup() {
   initControlState();        // Initialise control state
   initOutputs();             // Initialise outputs
   initPPM();                 // Set default PPM pulses
+  initMessage(xbeeMsg);      // Init our message header
   Serial.begin(115200);      // Open XBee/GCS Serial
   Serial.flush();
   #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 2 || DEBUG_LEVEL == 4 || DEBUG_LEVEL == 5
@@ -143,12 +148,30 @@ void loop() {
 
   updateStatusLED();        // Check if we need to toggle the status LED
   updateNavigationLights(); // Update Navigation lights
-  checkMessages();          // Check for incoming messages
+  checkMessages(xbeeMsg);          // Check for incoming messages
   checkSignal();            // Check if the signal is still good
 
 }
 
 /* Function definitions */
+
+/* initMessage() - Initialise message */
+
+boolean initMessage(messageState message) {
+
+	message.readBytes = 0;
+	message.length = MSG_HEADER_SIZE; // Init message.length as header length size
+	if(message.messageBuffer = calloc(MSG_BUFFER_SIZE, sizeof(char)) != NULL) {
+	
+		return true; // calloc() worked
+	
+	} else {
+	
+		return false; // calloc() failed
+	
+	} 
+	
+}
 
 /* initControlState() - Zeroes out everythang */
 
@@ -251,139 +274,85 @@ void updateNavigationLights() {
 
 /* checkMessages() - Check for and handle any incoming messages */
 
-void checkMessages() {
+boolean checkMessages(messageState msg) {
 
-  int x;
-  unsigned char testByte;
-  unsigned long currentTime = millis();
-  
-  if(Serial.available() > 0) {  // All of our bytes are here (either this is 1 or a message size), so process them
-
-    testByte = Serial.read();
-
-    if(!gotMsgBegin) { // We're waiting for a message begin marker, so check for one
-
-	if(testByte == MSG_BEGIN) {  // Found a message begin marker
-
-		#if DEBUG_LEVEL == 1
-		Serial1.print("BYTE[1/");
-		Serial1.print(msgWaitingBytes);
-		Serial1.print("]: ");
-		Serial1.print(testByte, HEX);
-		Serial1.println("  MSG BEGIN");
-		#endif
-		inMsg[0] = testByte; // Store testByte in the first slot of our message buffer
-		gotMsgBegin = true;
-                msgReadBytes = 1;
-                msgWaitingBytes = 2;
-                
-	} // Discard useless byte
+	unsigned char testByte = 0x00;
 	
-        #if DEBUG_LEVEL == 1	
-        else {
-          
-    	  Serial1.print("BYTE[0/");
-	  Serial1.print(msgWaitingBytes);
-	  Serial1.print("]: ");
-	  Serial1.print(testByte, HEX);
-	  Serial1.println("  JUNK BYTE");	
-        }
-	#endif
+	if(msg.readBytes == MSG_HEADER_SIZE) {
 
-    } else if(!gotMsgType) {  // We're waiting for a message type marker, grab this one
+		int x;	
+		// Finished reading the message header, check it
+		if(testChecksum(msg.messageBuffer, msg.readBytes)) { // Checksum was good
 
-	inMsg[1] = testByte; // Store testByte in the 2nd slot of our message buffer
-
-	#if DEBUG_LEVEL == 1
-	Serial1.print("BYTE[2/");
-	Serial1.print(msgWaitingBytes);
-	Serial1.print("]: ");
-	Serial1.print(testByte, HEX);
-	Serial1.print("  MSG TYPE");
-	#endif
-
-	gotMsgType = true;
-        msgReadBytes = 2;
-
-	if(testByte == MSG_TYPE_SYNC) { // Message is a sync message, handle it that way
-
-		#if DEBUG_LEVEL == 1
-		Serial1.println("-SYNC");
-		#endif
-		msgWaitingBytes = MSG_SIZE_SYNC;
-		
-	} else if(testByte == MSG_TYPE_CTRL) {
-
-		#if DEBUG_LEVEL == 1
-		Serial1.println("-CTRL");
-		#endif
-		msgWaitingBytes = MSG_SIZE_CTRL;
-
-	} else if(testByte == MSG_TYPE_PPZ) {
-
-		#if DEBUG_LEVEL == 1
-		Serial1.println("-PPZ");
-		#endif
-		msgWaitingBytes = MSG_SIZE_PPZ;
-
-	} else if(testByte == MSG_TYPE_CFG) {
-
-		#if DEBUG_LEVEL == 1
-		Serial1.println("-CFG");
-		#endif
-		msgWaitingBytes = MSG_SIZE_CFG;
 	
-	} else { // Not a valid message type?  Ignore this garbage
+			msg.length = msg.messageBuffer[2];  // 0 - MSG_BEGIN, 1 - MSG_TYPE, 2 - MSG_LENGTH
 
-		#if DEBUG_LEVEL == 1
-		Serial1.println("-INVALID");
-		#endif
-		gotMsgBegin = false;  // Set ready for next message
-		gotMsgType = false;
-		msgWaitingBytes = 1;
 
-	}
+		} else {			
 
-    } else { // We have our msgBegin and msgType markers, read the rest of the message into our buffer and handle it
+			for(x = 0 ; x < (MSG_HEADER_SIZE - 1) ; x++) { // Shift all message characters to the left, drop the first one
 
-        inMsg[msgReadBytes] = testByte;
-	#if DEBUG_LEVEL == 1
-	Serial1.print("BYTE[");
-	Serial1.print(msgReadBytes);
-	Serial1.print("/");
-	Serial1.print(msgWaitingBytes);
-	Serial1.print("]: ");
-	Serial1.print(testByte, HEX);
-	Serial1.println("  DATA");
-	#endif
-        msgReadBytes++;
+				msg.messageBuffer[x] = msg.messageBuffer[x + 1];
 
-        if(msgReadBytes >= msgWaitingBytes) {  // Message is done reading
+			}
 
-	if(testMessage(inMsg, msgWaitingBytes)) {  // Test the message checksum
-
-		commandsSinceLastAck++;
-
-		processMessage(inMsg, msgWaitingBytes); // Execute or process the message
-
-		if(commandsSinceLastAck > CMDS_PER_ACK) {
-
-			sendAck();  // Let the controller know we're alive
+			msg.readBytes--; // Decrement byte count and chuck the first byte, this will allow us to reprocess the other 3 bytes in case we are desynched with the message sender
 
 		}
 
+	} 
+
+	if(msg.readBytes < msg.length) { // Message is not finished being read
+
+		if(Serial.available() > 0) {
+
+			testByte = Serial.read();  // Read our byte		
+
+			#if DEBUG_LEVEL == 1
+			Serial1.print("BYTE[");
+			Serial1.print(msg.readBytes);
+			Serial1.print("/");
+			Serial1.print(msg.length);
+			Serial1.print(" - CSLA:");
+			Serial1.print(commandsSinceLastAck);
+			Serial1.print("]: ");
+			Serial1.println(testByte, HEX);
+			#endif		
+
+			msg.messageBuffer[msg.readBytes] = testByte; // Add the new byte to our message buffer
+			msg.readBytes++;			  // Increment readBytes
+	
+			return true;
+	
+		} else {
+
+			return false;
+	
+		}
+
+	} else { // Message is finished, process it
+
+		if(testChecksum(msg.messageBuffer, msg.length)) { // Checksum passed, process message..  If the checksum failed we can assume corruption elsewhere since the header was legit
+
+			processMessage(msg.messageBuffer, msg.length);
+
+		} 
+
+		int x;	
+
+		// Clear out message so it's ready to be used again	
+		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
+
+			msg.messageBuffer[x] = '\0';
+
+		}
+		msg.readBytes = 0;            // Zero out readBytes
+		msg.length = MSG_HEADER_SIZE; // Set message length to header length
+		
+		return 1;
+
 	}
 
-	gotMsgBegin = false;  // Set ready for next message
-	gotMsgType = false;  
-  	msgWaitingBytes = 1;
-
-        }
-
-    }
-
-  }
- 
 }
 
 /* checkSignal() - Check the signal state and make necessary updates */
@@ -450,9 +419,10 @@ void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
 
 }
 
-/* testMessage(message, length) - Test if the last byte checksum is good */
 
-boolean testMessage(unsigned char *message, int length) {
+/* testChecksum(message, length) - Test if the last byte checksum is good */
+
+int testChecksum(unsigned char *message, int length) {
 
 	unsigned int checksum = 0x00;
 	int x;
@@ -486,6 +456,23 @@ boolean testMessage(unsigned char *message, int length) {
 		return false;
 
 	}
+
+}
+
+/* generateChecksum(message, length) - Generate a checksum for message */
+
+unsigned char generateChecksum(unsigned char *message, int length) {
+
+	unsigned int checksum = 0x00;
+	int x;
+
+	for(x = 0 ; x < length ; x++) {
+
+		checksum = checksum ^ (unsigned int)message[x]; // Generate checksum
+
+	}
+
+	return checksum;
 
 }
 
@@ -580,31 +567,33 @@ void handleControlUpdate() {
 
 void sendAck() {
 
-	unsigned char msgSync[MSG_SIZE_SYNC];
+	unsigned char *msgSync;
         unsigned int checksum;
-	int x;
+	int x, msgSize;
 
-	#if DEBUG_LEVEL == 1	
+        msgSize = random(10, 30); // Sync message is between 10 and 30 chars
+        
+        msgSync = calloc(msgSize, sizeof(char)); // Allocate memory for sync msg
+        
+        #if DEBUG_LEVEL == 1	
 	Serial1.println("Sending SYNC ACK");
 	#endif 
 
 	msgSync[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
 	msgSync[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
-	for(x = 2 ; x < (MSG_SIZE_SYNC - 1) ; x++) { 
+        msgSync[2] = msgSize; // Message length
+        msgSync[3] = generateChecksum(msgSync, 3); // Header checksum
+        for(x = 4 ; x < msgSize ; x++) { 
 
 		msgSync[x] = (unsigned char)random(0, 254); // Fill all but the last character with random bytes
 
 	}
-	checksum = 0x00;
-	for(x = 0 ; x < (MSG_SIZE_SYNC - 1) ; x++) {
-
-		checksum = checksum ^ (unsigned int)msgSync[x];  // Generate our checksum for the sync msg
-
-	}
-	msgSync[MSG_SIZE_SYNC - 1] = checksum & 0xFF;  // Store the checksum
-	Serial.write(msgSync, MSG_SIZE_SYNC);     // Send the sync ACK
+        msgSync[msgSize - 1] = generateChecksum(msgSync, msgSize - 1); // Store our message checksum
+	Serial.write(msgSync, msgSize);     // Send the sync ACK
         Serial.flush();                          // Flush the serial buffer since it may be full of garbage
         commandsSinceLastAck = 0;               // Set commandsSinceLastAck to 0
+        
+        free(msgSync); // Deallocate memory for sync msg
 
 }
 
