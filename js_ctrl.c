@@ -162,7 +162,7 @@ typedef struct _messageState {
 int openPort(char *portName, char *use);
 int openJoystick(char *portName, jsState *joystickState);
 int readConfig(configValues *configInfo);
-void initTimer();
+void initTimer(configValues configInfo);
 void initAirframe();
 void translateJStoAF(jsState joystickState);
 void readJoystick(int jsPort, jsState *joystickState, configValues configInfo);
@@ -238,7 +238,7 @@ int main (int argc, char **argv)
 		return 1;
 	}
 
-	initTimer(); 	// Set up timer (every 20ms)
+	initTimer(configInfo); 	// Set up timer (every 20ms)
 
 	printf("Ready to read JS & relay for PPZ...\n");
 
