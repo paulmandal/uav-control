@@ -100,7 +100,8 @@ boolean checkMessages(messageState msg);
 boolean testMessage(unsigned char *message, int length);
 void processMessage(unsigned char *message, int length);
 void checkSignal();
-void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh);*/
+void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh);
+void handleControlUpdate();*/
 
 /* Setup function */
 
