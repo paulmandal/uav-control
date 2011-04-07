@@ -1,3 +1,4 @@
+
 /* joystick2ppm - Paul Mandal (paul.mandal@gmail.com)
  * 2.0 - Recieves encoded servo messages from joystick app on GCS
  *     - Updates PPM pulses at 100Hz
@@ -94,11 +95,13 @@ void initControlState();
 void initPPM();
 void initOutputs();
 boolean initMessage(messageState *message);
+boolean checkMessages(messageState *msg);
+void processMessage(unsigned char *message, int length);
+unsigned char generateChecksum(unsigned char *message, int length);
+boolean testChecksum(unsigned char *message, int length);
+void sendAck();
 void updateStatusLED();
 void updateNavigationLights();
-boolean checkMessages(messageState *msg);
-boolean testMessage(unsigned char *message, int length);
-void processMessage(unsigned char *message, int length);
 void checkSignal();
 void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh);
 void handleControlUpdate();*/
@@ -156,24 +159,6 @@ void loop() {
 }
 
 /* Function definitions */
-
-/* initMessage() - Initialise message */
-
-boolean initMessage(messageState *message) {
-
-	message->readBytes = 0;
-	message->length = MSG_HEADER_SIZE; // Init message.length as header length size
-	if((message->messageBuffer = (unsigned char*)calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
-	
-		return true; // calloc() worked
-	
-	} else {
-	
-		return false; // calloc() failed
-	
-	} 
-	
-}
 
 /* initControlState() - Zeroes out everythang */
 
@@ -236,42 +221,22 @@ void initOutputs() {
   
 }
 
-/* updateStatusLED() - Update status LED based on things */
+/* initMessage() - Initialise message */
 
-void updateStatusLED() {
+boolean initMessage(messageState *message) {
 
-  unsigned long currentTime = millis(); // get current time
-  if(currentTime - lastStatusLEDTime > statusLEDInterval) {
-
-    lastStatusLEDTime = currentTime;              // If more time than statusLEDInterval has passed, replace lastStatusLEDTime with currentTime
-    statusLEDState = !statusLEDState;             // Flip statusLEDState
-    digitalWrite(STATUS_LED_PIN, statusLEDState); // Display status LED
-
-  }
-
-}
-
-/* updateNavigationLights() - Update status LED based on things */
-
-void updateNavigationLights() {
-
-  if(navlightEnabled) {
-    
-    unsigned long currentTime = millis(); // get current time
-    if(currentTime - navlightLastTime > navlightInterval) {
-
-      navlightLastTime = currentTime;              // If more time than navlightInterval has passed, replace navlightLastTime with currentTime
-      navlightState = !navlightState;              // Flip navlightState
-      digitalWrite(NAVLIGHT_PIN, navlightState);   // Display navlight LED
-
-    }
-  
-  } else {
-    
-    digitalWrite(NAVLIGHT_PIN, false);  // Navlights are turned off
-    
-  }
-
+	message->readBytes = 0;
+	message->length = MSG_HEADER_SIZE; // Init message.length as header length size
+	if((message->messageBuffer = (unsigned char*)calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
+	
+		return true; // calloc() worked
+	
+	} else {
+	
+		return false; // calloc() failed
+	
+	} 
+	
 }
 
 /* checkMessages() - Check for and handle any incoming messages */
@@ -354,6 +319,185 @@ boolean checkMessages(messageState *msg) {
 		return 1;
 
 	}
+
+}
+
+/* processMessage(message, length) - Do whatever the message tells us to do */
+
+void processMessage(unsigned char *message, int length) {
+
+        int x;
+	unsigned char msgType = message[1];
+
+	#if DEBUG_LEVEL == 1
+        Serial1.print("CSLA: ");
+        Serial1.println(commandsSinceLastAck);
+	#endif
+
+	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
+
+		 sendAck(); // Send ACK for the SYNC signal
+
+	} else if(msgType == MSG_TYPE_CTRL) { // Handle updating the controls
+
+ 		lastMsgTime = millis(); // Only command messages count for this
+        	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
+		/* MSG structure - [BEGIN_MSG] [MSG_TYPE] [SERVOS] [BUTTONS] [CHECKSUM]
+	         * BEGIN_MSG - 1 byte  - 1 byte msg marker
+		 * MSG_TYPE  - 1 byte  - 1 byte msg type marker
+	         * SERVOS    - 8 bytes - 1 byte per servo
+	         * BUTTONS   - 3 bytes - 2 bits per pin (allow more than on/off, e.g. 3-pos switch)
+	         * CHECKSUM  - 1 byte  - 1 byte XOR checksum
+	         */
+          
+	        for(x = 0 ; x < SERVO_COUNT ; x++) {
+
+	          servos[x] = message[x + 2]; // Set latest servo values from msg
+
+	        }
+
+	        for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
+
+	          buttons[(x * 4)] = (message[x + 10] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
+	          buttons[(x * 4) + 1] = (message[x + 10] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
+		  buttons[(x * 4) + 2] = (message[x + 10] & B00001100) >> 2; // Same
+	          buttons[(x * 4) + 3] = (message[x + 10] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
+
+	        }
+
+                handleControlUpdate();
+
+	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
+	} else if(msgType == MSG_TYPE_CFG) { // Handle configuration message
+	}
+
+}
+
+/* generateChecksum(message, length) - Generate a checksum for message */
+
+unsigned char generateChecksum(unsigned char *message, int length) {
+
+	unsigned int checksum = 0x00;
+	int x;
+
+	for(x = 0 ; x < length ; x++) {
+
+		checksum = checksum ^ (unsigned int)message[x]; // Generate checksum
+
+	}
+
+	return checksum;
+
+}
+
+/* testChecksum(message, length) - Test if the last byte checksum is good */
+
+int testChecksum(unsigned char *message, int length) {
+
+	unsigned int checksum = 0x00;
+	int x;
+
+	#if DEBUG_LEVEL == 1
+	Serial1.print("CHKMSG: ");
+	#endif
+
+	for(x = 0 ; x < length ; x++) {
+
+		#if DEBUG_LEVEL == 1
+		Serial1.print((unsigned int)message[x], HEX);
+		Serial1.print(" ");
+		#endif
+                checksum = checksum ^ (unsigned int)message[x];  // Test this message against its checksum (last byte)
+
+	}
+	#if DEBUG_LEVEL == 1
+	Serial1.print("CHK: ");
+	Serial1.println(checksum, HEX);
+        Serial1.print("CSLA: ");
+        Serial1.println(commandsSinceLastAck);
+	#endif
+
+	if(checksum == 0x00) {
+
+		return true;  // Checksum passed!
+
+	} else {
+
+		return false;
+
+	}
+
+}
+
+/* sendAck() - Send SYNC acknowledgement message */
+
+void sendAck() {
+
+	unsigned char *msgSync;
+        unsigned int checksum;
+	int x, msgSize;
+
+        msgSize = random(10, 30); // Sync message is between 10 and 30 chars
+        
+        msgSync = (unsigned char*)calloc(msgSize, sizeof(char)); // Allocate memory for sync msg
+        
+        #if DEBUG_LEVEL == 1	
+	Serial1.println("Sending SYNC ACK");
+	#endif 
+
+	msgSync[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
+	msgSync[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
+        msgSync[2] = msgSize; // Message length
+        msgSync[3] = generateChecksum(msgSync, 3); // Header checksum
+        for(x = 4 ; x < msgSize ; x++) { 
+
+		msgSync[x] = (unsigned char)random(0, 254); // Fill all but the last character with random bytes
+
+	}
+        msgSync[msgSize - 1] = generateChecksum(msgSync, msgSize - 1); // Store our message checksum
+	Serial.write(msgSync, msgSize);     // Send the sync ACK
+        Serial.flush();                          // Flush the serial buffer since it may be full of garbage
+        commandsSinceLastAck = 0;               // Set commandsSinceLastAck to 0
+        
+        free(msgSync); // Deallocate memory for sync msg
+
+}
+
+/* updateStatusLED() - Update status LED based on things */
+
+void updateStatusLED() {
+
+  unsigned long currentTime = millis(); // get current time
+  if(currentTime - lastStatusLEDTime > statusLEDInterval) {
+
+    lastStatusLEDTime = currentTime;              // If more time than statusLEDInterval has passed, replace lastStatusLEDTime with currentTime
+    statusLEDState = !statusLEDState;             // Flip statusLEDState
+    digitalWrite(STATUS_LED_PIN, statusLEDState); // Display status LED
+
+  }
+
+}
+
+/* updateNavigationLights() - Update status LED based on things */
+
+void updateNavigationLights() {
+
+  if(navlightEnabled) {
+    
+    unsigned long currentTime = millis(); // get current time
+    if(currentTime - navlightLastTime > navlightInterval) {
+
+      navlightLastTime = currentTime;              // If more time than navlightInterval has passed, replace navlightLastTime with currentTime
+      navlightState = !navlightState;              // Flip navlightState
+      digitalWrite(NAVLIGHT_PIN, navlightState);   // Display navlight LED
+
+    }
+  
+  } else {
+    
+    digitalWrite(NAVLIGHT_PIN, false);  // Navlights are turned off
+    
+  }
 
 }
 
@@ -440,113 +584,6 @@ void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
 }
 
 
-/* testChecksum(message, length) - Test if the last byte checksum is good */
-
-int testChecksum(unsigned char *message, int length) {
-
-	unsigned int checksum = 0x00;
-	int x;
-
-	#if DEBUG_LEVEL == 1
-	Serial1.print("CHKMSG: ");
-	#endif
-
-	for(x = 0 ; x < length ; x++) {
-
-		#if DEBUG_LEVEL == 1
-		Serial1.print((unsigned int)message[x], HEX);
-		Serial1.print(" ");
-		#endif
-                checksum = checksum ^ (unsigned int)message[x];  // Test this message against its checksum (last byte)
-
-	}
-	#if DEBUG_LEVEL == 1
-	Serial1.print("CHK: ");
-	Serial1.println(checksum, HEX);
-        Serial1.print("CSLA: ");
-        Serial1.println(commandsSinceLastAck);
-	#endif
-
-	if(checksum == 0x00) {
-
-		return true;  // Checksum passed!
-
-	} else {
-
-		return false;
-
-	}
-
-}
-
-/* generateChecksum(message, length) - Generate a checksum for message */
-
-unsigned char generateChecksum(unsigned char *message, int length) {
-
-	unsigned int checksum = 0x00;
-	int x;
-
-	for(x = 0 ; x < length ; x++) {
-
-		checksum = checksum ^ (unsigned int)message[x]; // Generate checksum
-
-	}
-
-	return checksum;
-
-}
-
-/* processMessage(message, length) - Do whatever the message tells us to do */
-
-void processMessage(unsigned char *message, int length) {
-
-        int x;
-	unsigned char msgType = message[1];
-
-	#if DEBUG_LEVEL == 1
-        Serial1.print("CSLA: ");
-        Serial1.println(commandsSinceLastAck);
-	#endif
-
-	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
-
-		 sendAck(); // Send ACK for the SYNC signal
-
-	} else if(msgType == MSG_TYPE_CTRL) { // Handle updating the controls
-
- 		lastMsgTime = millis(); // Only command messages count for this
-        	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
-		/* MSG structure - [BEGIN_MSG] [MSG_TYPE] [SERVOS] [BUTTONS] [CHECKSUM]
-	         * BEGIN_MSG - 1 byte  - 1 byte msg marker
-		 * MSG_TYPE  - 1 byte  - 1 byte msg type marker
-	         * SERVOS    - 8 bytes - 1 byte per servo
-	         * BUTTONS   - 3 bytes - 2 bits per pin (allow more than on/off, e.g. 3-pos switch)
-	         * CHECKSUM  - 1 byte  - 1 byte XOR checksum
-	         */
-          
-	        for(x = 0 ; x < SERVO_COUNT ; x++) {
-
-	          servos[x] = message[x + 2]; // Set latest servo values from msg
-
-	        }
-
-	        for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
-
-	          buttons[(x * 4)] = (message[x + 10] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
-	          buttons[(x * 4) + 1] = (message[x + 10] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
-		  buttons[(x * 4) + 2] = (message[x + 10] & B00001100) >> 2; // Same
-	          buttons[(x * 4) + 3] = (message[x + 10] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
-
-	        }
-
-                handleControlUpdate();
-
-	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
-	} else if(msgType == MSG_TYPE_CFG) { // Handle configuration message
-	}
-
-}
-
 /* handleControlUpdate() - Handle updates to the controls */
 
 void handleControlUpdate() {
@@ -581,40 +618,6 @@ void handleControlUpdate() {
   }
   #endif
   
-}
-
-/* sendAck() - Send SYNC acknowledgement message */
-
-void sendAck() {
-
-	unsigned char *msgSync;
-        unsigned int checksum;
-	int x, msgSize;
-
-        msgSize = random(10, 30); // Sync message is between 10 and 30 chars
-        
-        msgSync = (unsigned char*)calloc(msgSize, sizeof(char)); // Allocate memory for sync msg
-        
-        #if DEBUG_LEVEL == 1	
-	Serial1.println("Sending SYNC ACK");
-	#endif 
-
-	msgSync[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
-	msgSync[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
-        msgSync[2] = msgSize; // Message length
-        msgSync[3] = generateChecksum(msgSync, 3); // Header checksum
-        for(x = 4 ; x < msgSize ; x++) { 
-
-		msgSync[x] = (unsigned char)random(0, 254); // Fill all but the last character with random bytes
-
-	}
-        msgSync[msgSize - 1] = generateChecksum(msgSync, msgSize - 1); // Store our message checksum
-	Serial.write(msgSync, msgSize);     // Send the sync ACK
-        Serial.flush();                          // Flush the serial buffer since it may be full of garbage
-        commandsSinceLastAck = 0;               // Set commandsSinceLastAck to 0
-        
-        free(msgSync); // Deallocate memory for sync msg
-
 }
 
 /* ISR - TIMER1_COMPAT_Vect, generates the PPM signal */
