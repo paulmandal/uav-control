@@ -173,6 +173,7 @@ void writePortMsg(int outputPort, char *portName, unsigned char *message, int me
 char *fgetsNoNewline(char *s, int n, FILE *stream);
 int checkMessages(int msgPort, messageState *msg);
 int testChecksum(unsigned char *message, int length);
+int initMessage(messageState *message);
 unsigned char generateChecksum(unsigned char *message, int length);
 void checkSignal(int commandsPerAck);
 void processMessage(unsigned char *message, int length);
@@ -210,10 +211,8 @@ int main (int argc, char **argv)
 	configValues configInfo;   	      // Configuration values
 	messageState xbeeMsg;		      // messageState for incoming XBee message
 
-	xbeeMsg.messageBuffer = calloc(MSG_BUFFER_SIZE, sizeof(char));
-	xbeeMsg.readBytes = 0;
-	xbeeMsg.length = MSG_HEADER_SIZE; // Init message.length as header length size
-
+	initMessage(&xbeeMsg);
+	
 	printf("Starting js_crl version %d.%d.%d...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Print version information
 
 	srand(time(NULL));  // Init random using current time
@@ -295,6 +294,25 @@ int main (int argc, char **argv)
 }
 
 /* Function definitions */
+
+/* initMessage() - Initialise message */
+
+int initMessage(messageState *message) {
+
+	message->readBytes = 0;
+	message->length = MSG_HEADER_SIZE; // Init message.length as header length size
+	if((message->messageBuffer = calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
+	
+		return 1; // calloc() worked
+	
+	} else {
+	
+		return 0; // calloc() failed
+	
+	} 
+
+	
+}
 
 /* initAirframe() - Initalise airframe state */
 
@@ -780,7 +798,7 @@ int readConfig(configValues *configInfo) {
 
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
 
-					int bufferPos, currButton, strPos, buttonCount = 0;
+					int bufferPos, currButton, strPos, buttonCount = 1;
 					char buttonBuffer[4]; // More than 3 digits of a button state is a bit ridiculous
 					int lineLength = strlen(line);
 					for(strPos = 0 ; strPos < lineLength ; strPos++) { // Iterate through line[] character by character to get the button count
@@ -909,7 +927,7 @@ int checkMessages(int msgPort, messageState *msg) {
 		if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
 
 			#if DEBUG_LEVEL == 1
-			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x", msg->readMsgBytes, msg->msgWaitingBytes, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
+			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x", msg->readBytes, msg->length, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
 			#endif		
 
 			msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
