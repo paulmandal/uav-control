@@ -16,6 +16,10 @@
  * ADC: 24, 25, 26, 27, 28, 29 (I think?)
  */
 
+/* Including things */
+
+#include "joystickRC_structs.h"
+
 /* This is the defining moment of the file */
 
 #define DEBUG_LEVEL 3   // 1 - Messaging debugging
@@ -59,16 +63,6 @@
 #define NAVLIGHT_PIN 18                 // Navigation light pin
 #define NAVLIGHT_INTERVAL 1000          // Toggle every 1s
 
-/* Structures */
-
-struct messageState {
-
-	unsigned char *messageBuffer;
-	int readBytes;
-	int length;
-
-};
-
 /* Various varibles to hold state info */
 
 unsigned int servos[SERVO_COUNT];        // store servo states
@@ -94,7 +88,7 @@ messageState xbeeMsg;
 
 int commandsSinceLastAck = 0;
 
-/* Function prototypes */
+/* Arduino is racist against function prototypes 
 
 void initControlState();
 void initPPM();
@@ -106,7 +100,7 @@ boolean checkMessages(messageState msg);
 boolean testMessage(unsigned char *message, int length);
 void processMessage(unsigned char *message, int length);
 void checkSignal();
-void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh);
+void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh);*/
 
 /* Setup function */
 
@@ -149,11 +143,10 @@ void loop() {
   int x;
   updateStatusLED();        // Check if we need to toggle the status LED
   updateNavigationLights(); // Update Navigation lights
-  checkMessages(xbeeMsg);          // Check for incoming messages
 
   for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessages() should be run with a much higher frequency than the LED updates or checkSignal()
   
-    checkMessages();          // Check for incoming messages
+    checkMessages(xbeeMsg);          // Check for incoming messages
 
   }
 
@@ -169,7 +162,7 @@ boolean initMessage(messageState message) {
 
 	message.readBytes = 0;
 	message.length = MSG_HEADER_SIZE; // Init message.length as header length size
-	if(message.messageBuffer = calloc(MSG_BUFFER_SIZE, sizeof(char)) != NULL) {
+	if((message.messageBuffer = (unsigned char*)calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
 	
 		return true; // calloc() worked
 	
@@ -599,7 +592,7 @@ void sendAck() {
 
         msgSize = random(10, 30); // Sync message is between 10 and 30 chars
         
-        msgSync = calloc(msgSize, sizeof(char)); // Allocate memory for sync msg
+        msgSync = (unsigned char*)calloc(msgSize, sizeof(char)); // Allocate memory for sync msg
         
         #if DEBUG_LEVEL == 1	
 	Serial1.println("Sending SYNC ACK");
