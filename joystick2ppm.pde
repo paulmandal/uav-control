@@ -93,10 +93,10 @@ int commandsSinceLastAck = 0;
 void initControlState();
 void initPPM();
 void initOutputs();
-boolean initMessage(messageState message);
+boolean initMessage(messageState *message);
 void updateStatusLED();
 void updateNavigationLights();
-boolean checkMessages(messageState msg);
+boolean checkMessages(messageState *msg);
 boolean testMessage(unsigned char *message, int length);
 void processMessage(unsigned char *message, int length);
 void checkSignal();
@@ -113,7 +113,7 @@ void setup() {
   initControlState();        // Initialise control state
   initOutputs();             // Initialise outputs
   initPPM();                 // Set default PPM pulses
-  initMessage(xbeeMsg);      // Init our message header
+  initMessage(&xbeeMsg);      // Init our message header
   Serial.begin(115200);      // Open XBee/GCS Serial
   Serial.flush();
   #if DEBUG_LEVEL > 0
@@ -147,7 +147,7 @@ void loop() {
 
   for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessages() should be run with a much higher frequency than the LED updates or checkSignal()
   
-    checkMessages(xbeeMsg);          // Check for incoming messages
+    checkMessages(&xbeeMsg);          // Check for incoming messages
 
   }
 
@@ -159,11 +159,11 @@ void loop() {
 
 /* initMessage() - Initialise message */
 
-boolean initMessage(messageState message) {
+boolean initMessage(messageState *message) {
 
-	message.readBytes = 0;
-	message.length = MSG_HEADER_SIZE; // Init message.length as header length size
-	if((message.messageBuffer = (unsigned char*)calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
+	message->readBytes = 0;
+	message->length = MSG_HEADER_SIZE; // Init message.length as header length size
+	if((message->messageBuffer = (unsigned char*)calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
 	
 		return true; // calloc() worked
 	
@@ -276,35 +276,35 @@ void updateNavigationLights() {
 
 /* checkMessages() - Check for and handle any incoming messages */
 
-boolean checkMessages(messageState msg) {
+boolean checkMessages(messageState *msg) {
 
 	unsigned char testByte = 0x00;
 	
-	if(msg.readBytes == MSG_HEADER_SIZE) {
+	if(msg->readBytes == MSG_HEADER_SIZE) {
 
 		int x;	
 		// Finished reading the message header, check it
-		if(testChecksum(msg.messageBuffer, msg.readBytes)) { // Checksum was good
+		if(testChecksum(msg->messageBuffer, msg->readBytes)) { // Checksum was good
 
 	
-			msg.length = msg.messageBuffer[2];  // 0 - MSG_BEGIN, 1 - MSG_TYPE, 2 - MSG_LENGTH
+			msg->length = msg->messageBuffer[2];  // 0 - MSG_BEGIN, 1 - MSG_TYPE, 2 - MSG_LENGTH
 
 
 		} else {			
 
 			for(x = 0 ; x < (MSG_HEADER_SIZE - 1) ; x++) { // Shift all message characters to the left, drop the first one
 
-				msg.messageBuffer[x] = msg.messageBuffer[x + 1];
+				msg->messageBuffer[x] = msg->messageBuffer[x + 1];
 
 			}
 
-			msg.readBytes--; // Decrement byte count and chuck the first byte, this will allow us to reprocess the other 3 bytes in case we are desynched with the message sender
+			msg->readBytes--; // Decrement byte count and chuck the first byte, this will allow us to reprocess the other 3 bytes in case we are desynched with the message sender
 
 		}
 
 	} 
 
-	if(msg.readBytes < msg.length) { // Message is not finished being read
+	if(msg->readBytes < msg->length) { // Message is not finished being read
 
 		if(Serial.available() > 0) {
 
@@ -312,17 +312,17 @@ boolean checkMessages(messageState msg) {
 
 			#if DEBUG_LEVEL == 1
 			Serial1.print("BYTE[");
-			Serial1.print(msg.readBytes);
+			Serial1.print(msg->readBytes);
 			Serial1.print("/");
-			Serial1.print(msg.length);
+			Serial1.print(msg->length);
 			Serial1.print(" - CSLA:");
 			Serial1.print(commandsSinceLastAck);
 			Serial1.print("]: ");
 			Serial1.println(testByte, HEX);
 			#endif		
 
-			msg.messageBuffer[msg.readBytes] = testByte; // Add the new byte to our message buffer
-			msg.readBytes++;			  // Increment readBytes
+			msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
+			msg->readBytes++;			  // Increment readBytes
 	
 			return true;
 	
@@ -334,9 +334,9 @@ boolean checkMessages(messageState msg) {
 
 	} else { // Message is finished, process it
 
-		if(testChecksum(msg.messageBuffer, msg.length)) { // Checksum passed, process message..  If the checksum failed we can assume corruption elsewhere since the header was legit
+		if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  If the checksum failed we can assume corruption elsewhere since the header was legit
 
-			processMessage(msg.messageBuffer, msg.length);
+			processMessage(msg->messageBuffer, msg->length);
 
 		} 
 
@@ -345,11 +345,11 @@ boolean checkMessages(messageState msg) {
 		// Clear out message so it's ready to be used again	
 		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
 
-			msg.messageBuffer[x] = '\0';
+			msg->messageBuffer[x] = '\0';
 
 		}
-		msg.readBytes = 0;            // Zero out readBytes
-		msg.length = MSG_HEADER_SIZE; // Set message length to header length
+		msg->readBytes = 0;            // Zero out readBytes
+		msg->length = MSG_HEADER_SIZE; // Set message length to header length
 		
 		return 1;
 
