@@ -216,7 +216,6 @@ int main (int argc, char **argv)
 	printf("Starting js_crl version %d.%d.%d...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Print version information
 
 	srand(time(NULL));  // Init random using current time
-	
 	if(readConfig(&configInfo) < 0) { // Read our config into our config vars
 
 		perror("js_ctrl"); // Error reading config file
@@ -375,7 +374,7 @@ int openJoystick(char *portName, jsState *joystickState) {
 int readConfig(configValues *configInfo) {
 
 	FILE *fp;
-	int x, readCount = 0, lineBuffer = 1024;
+	int x, buttonCount = 1, readCount = 0, lineBuffer = 1024;
 	char line[lineBuffer];
 	if ((fp = fopen(CONFIG_FILE, "r")) == NULL) {  // Open the config file read-only
 		
@@ -454,25 +453,31 @@ int readConfig(configValues *configInfo) {
 
 			} else if(strcmp(line, "[Button State Count]") ==0) {
 
+	printf("1\n");
 
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+	printf("2\n");
 
-					int bufferPos, currButton, strPos, buttonCount = 1;
+					int bufferPos, currButton, strPos;
 					char buttonBuffer[4]; // More than 3 digits of a button state is a bit ridiculous
 					int lineLength = strlen(line);
-					for(strPos = 0 ; strPos < lineLength ; strPos++) { // Iterate through line[] character by character to get the button count
+					printf("3\n");
+	for(strPos = 0 ; strPos < lineLength ; strPos++) { // Iterate through line[] character by character to get the button count
 
-						if(line[strPos] == ',') { // Each comma separates a button state count so totalling them should get us our button count
+							printf("4\n");
+if(line[strPos] == ',') { // Each comma separates a button state count so totalling them should get us our button count
 
 							buttonCount++;
 
 						}
 					}
+	printf("5\n");
 
 					configInfo->buttonStateCount = calloc(buttonCount, sizeof(int)); // Allocate memory for our button state counts
 
 					currButton = 0;
 					strPos = 0;
+	printf("6\n");
 
 					while(currButton < buttonCount && strPos < lineLength) {  // Keep reading button states while we have lineLength left and buttonCount to meet
 
@@ -483,31 +488,39 @@ int readConfig(configValues *configInfo) {
 						}
 
 						bufferPos = 0;
+	printf("7\n");
 
-						while(line[strPos] != ',') {
+						while(line[strPos] != ',' && line[strPos] != '\0' && strPos < lineLength) {
+	printf("8\n");
 
 							buttonBuffer[bufferPos] = line[strPos];
 							bufferPos++;
 							strPos++;
 
 						}
+	printf("9\n");
 
 						strPos++; // Increment past the last comma
 
+		printf("10\n");
 						configInfo->buttonStateCount[currButton] = atoi(buttonBuffer);
 						currButton++;
+
+	printf("11\n");
 
 					}
 					
 				}
-	
+
 			}
 
 		}
 
 	}
+	printf("12\n");
 
 	fclose(fp);
+	printf("13\n");
 
 	printf("\nUsing config from %s:\n", CONFIG_FILE); // Print config values
 	printf("                  XBee Port: %s\n", configInfo->xbeePortFile);
@@ -520,12 +533,13 @@ int readConfig(configValues *configInfo) {
 	
 	for(x = 0 ; x < buttonCount ; x++) {
 	
-		printf("%2d: %2d	", x + 1, configInfo->buttonStateCount[x]);
-		if(x % 4 == 0) {
+		if(x != 0 && x % 4 == 0) {
 			printf("\n");
 		}
+		printf("%2d: %2d		", x + 1, configInfo->buttonStateCount[x]);
 	
 	}
+	printf("\n");
 
 	if(readCount >= CONFIG_FILE_MIN_COUNT) {
 
@@ -533,7 +547,7 @@ int readConfig(configValues *configInfo) {
 
 	} else {
 
-		return -1;  // Didn't read enough of config values
+		return 0;  // Didn't read enough of config values
 
 	}	
 
