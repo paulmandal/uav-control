@@ -453,31 +453,24 @@ int readConfig(configValues *configInfo) {
 
 			} else if(strcmp(line, "[Button State Count]") ==0) {
 
-	printf("1\n");
-
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
-	printf("2\n");
 
 					int bufferPos, currButton, strPos;
 					char buttonBuffer[4]; // More than 3 digits of a button state is a bit ridiculous
 					int lineLength = strlen(line);
-					printf("3\n");
-	for(strPos = 0 ; strPos < lineLength ; strPos++) { // Iterate through line[] character by character to get the button count
+					for(strPos = 0 ; strPos < lineLength ; strPos++) { // Iterate through line[] character by character to get the button count
 
-							printf("4\n");
-if(line[strPos] == ',') { // Each comma separates a button state count so totalling them should get us our button count
+						if(line[strPos] == ',') { // Each comma separates a button state count so totalling them should get us our button count
 
 							buttonCount++;
 
 						}
 					}
-	printf("5\n");
 
 					configInfo->buttonStateCount = calloc(buttonCount, sizeof(int)); // Allocate memory for our button state counts
 
 					currButton = 0;
 					strPos = 0;
-	printf("6\n");
 
 					while(currButton < buttonCount && strPos < lineLength) {  // Keep reading button states while we have lineLength left and buttonCount to meet
 
@@ -488,25 +481,18 @@ if(line[strPos] == ',') { // Each comma separates a button state count so totall
 						}
 
 						bufferPos = 0;
-	printf("7\n");
 
 						while(line[strPos] != ',' && line[strPos] != '\0' && strPos < lineLength) {
-	printf("8\n");
 
 							buttonBuffer[bufferPos] = line[strPos];
 							bufferPos++;
 							strPos++;
 
 						}
-	printf("9\n");
 
 						strPos++; // Increment past the last comma
-
-		printf("10\n");
 						configInfo->buttonStateCount[currButton] = atoi(buttonBuffer);
 						currButton++;
-
-	printf("11\n");
 
 					}
 					
@@ -517,10 +503,8 @@ if(line[strPos] == ',') { // Each comma separates a button state count so totall
 		}
 
 	}
-	printf("12\n");
 
 	fclose(fp);
-	printf("13\n");
 
 	printf("\nUsing config from %s:\n", CONFIG_FILE); // Print config values
 	printf("                  XBee Port: %s\n", configInfo->xbeePortFile);
