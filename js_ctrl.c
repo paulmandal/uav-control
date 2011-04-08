@@ -52,7 +52,7 @@ Adruino:
 
 /* Definitions */
 
-#define DEBUG_LEVEL 0	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 1	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Debug messaging/handshaking
 			      // Debug level - 2 - Debug joystick position info
 
@@ -198,6 +198,8 @@ int xbeePort;          // XBee port FD
 volatile int commandsSinceLastAck = 0;  // Commands sent since last ACK
 volatile int handShook = 0;             // Handshook?
 
+unsigned long totalMsgs = 0;
+
 #if DEBUG_LEVEL > 0
 int debugCommandsPerAck = 0;
 #endif
@@ -255,7 +257,7 @@ int main (int argc, char **argv)
 
 				if(!checkMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
 
-					usleep(50); // If nothing is there pause for 100usec, handshake is sent out by interrupt at 50Hz
+					usleep(1000); // If nothing is there pause for 100usec, handshake is sent out by interrupt at 50Hz
 
 				};
 
@@ -278,7 +280,7 @@ int main (int argc, char **argv)
 
 			if(!checkMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
 
-				usleep(1); // If there was nothing pending pause for 100usec, max pause per loop is 1,000usec = 1ms
+				usleep(1000); // If there was nothing pending pause for 100usec, max pause per loop is 1,000usec = 1ms
 			};  
 
 		}
@@ -758,27 +760,39 @@ int initMessage(messageState *message) {
 int checkMessages(int msgPort, messageState *msg) {
 
 	unsigned char testByte = 0x00;
+	int msgGood = 0;
 	
 	if(msg->readBytes == MSG_HEADER_SIZE) {
 
 		int x;	
 		// Finished reading the message header, check it
-		if(testChecksum(msg->messageBuffer, msg->readBytes)) { // Checksum was good
+
+		// First character must be a MSG_BEGIN
+		
+		if(msg->messageBuffer[0] == MSG_BEGIN) {
+		
+			if(testChecksum(msg->messageBuffer, msg->readBytes)) { // Checksum was good
 
 	
-			msg->length = msg->messageBuffer[2];  // 0 - MSG_BEGIN, 1 - MSG_TYPE, 2 - MSG_LENGTH
+				msg->length = msg->messageBuffer[2];  // 0 - MSG_BEGIN, 1 - MSG_TYPE, 2 - MSG_LENGTH
+				msgGood = 1;
 
 
-		} else {			
-
+			} 			
+			
+		} 
+		
+		if(!msgGood) { // Something was wrong with the message header
+		
+		
 			for(x = 0 ; x < (MSG_HEADER_SIZE - 1) ; x++) { // Shift all message characters to the left, drop the first one
 
 				msg->messageBuffer[x] = msg->messageBuffer[x + 1];
-
+		
 			}
 
 			msg->readBytes--; // Decrement byte count and chuck the first byte, this will allow us to reprocess the other 3 bytes in case we are desynched with the message sender
-
+		
 		}
 
 	} 
@@ -853,6 +867,16 @@ void processMessage(unsigned char *message, int length) {
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize) {
 
 	int msgWrote = 0;
+	int x;
+	#if DEBUG_LEVEL == 21
+	printf("WRITING[%2d]: ", messageSize);
+	for(x = 0 ; x < messageSize ; x++) {
+		
+		printf("%2x ", message[x]);
+	
+	}
+	printf("\n");
+	#endif
 	msgWrote = write(outputPort, message, messageSize);  // write() and store written byte count in msgWrote
 	if(msgWrote != messageSize) { // If written byte count is not expected value
 				
@@ -870,11 +894,25 @@ unsigned char generateChecksum(unsigned char *message, int length) {
 	unsigned int checksum = 0x00;
 	int x;
 
+	#if DEBUG_LEVEL == 21
+	printf("GENCHK[%2d]: ", length);
+	for(x = 0 ; x < length ; x++) {
+
+		printf("%2x ", (unsigned int)message[x]); // Print the whole message in hex
+
+	}
+	printf("CHK: "); // Print the checksum marker
+	#endif	
+
 	for(x = 0 ; x < length ; x++) {
 
 		checksum = checksum ^ (unsigned int)message[x]; // Generate checksum
 
 	}
+
+	#if DEBUG_LEVEL == 21
+	printf("%2x\n\n", checksum); // Print the checksum
+	#endif	
 
 	return checksum;
 
@@ -956,6 +994,7 @@ void sendCtrlUpdate(int signum) {
 
 		writePortMsg(xbeePort, "XBee", xbeeMsg, msgSize); // Write out message to XBee
 		free(xbeeMsg); // Deallocate memory for xbeeMsg
+		totalMsgs++;
 		commandsSinceLastAck++;
 	
 	} else {  // We aren't synced up, send sync msg
@@ -972,7 +1011,7 @@ void sendCtrlUpdate(int signum) {
 		handshakeMsg[3] = generateChecksum(handshakeMsg, MSG_HEADER_SIZE - 1);
 		for(x = MSG_HEADER_SIZE ; x < msgSize ; x++) {
 
-			handshakeMsg[x] = rand() % 254;  // Build the random data portion of the handshake message
+			handshakeMsg[x] = (unsigned char)(rand() % 254);  // Build the random data portion of the handshake message
 		
 		}
 
@@ -998,6 +1037,7 @@ void checkSignal(int commandsPerAck) {
 		printf("Lost signal!  Attempting to resync.\n");
 		#if DEBUG_LEVEL == 1
 		printf("CSLA: %3d\n", commandsSinceLastAck);
+		printf("Total msgs: %lu\n", totalMsgs);
 		#endif
 
 	}
