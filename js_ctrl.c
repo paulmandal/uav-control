@@ -785,7 +785,7 @@ int checkMessages(int msgPort, messageState *msg) {
 
 	if(msg->readBytes < msg->length) { // Message is not finished being read
 
-		if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
+		if(read(xbeePort, &testByte, sizeof(char)) == sizeof(char)) {  // We read a byte, so process it
 
 			#if DEBUG_LEVEL == 1
 			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x\n", msg->readBytes, msg->length, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
