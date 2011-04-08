@@ -236,38 +236,27 @@ int main (int argc, char **argv)
 		return 1;
 	}*/
 
-	if((jsPort = openJoystick(configInfo.joystickPortFile, &joystickState)) < 0) { // open the Joystick
-		return 1;
-	}
-
-	initTimer(configInfo); 	// Set up timer (every 20ms)
-
 	printf("Ready to read JS & relay for PPZ...\n");
 
 	while (1) {
 
-		if(!handShook) {
+		while(!handShook) {
 
-			printf("Handshaking..");
-			#if DEBUG_LEVEL == 1	
-			printf("\n");
-			#endif
-
-			while(!handShook) {  // Handshaking loop
-
-				if(!checkMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
-
-					usleep(100); // If nothing is there pause for 100usec, handshake is sent out by interrupt at 50Hz
-
-				} else {
-				
-					usleep(10); // Give 10usec for character to be removed from buffer by read()
-				
-				}
-
+			unsigned long totalMsgs = 0;
+			unsigned char msgByte;
+			unsigned char buffer[2];
+			msgByte = (unsigned char)(rand() % 255);
+			writePortMsg(xbeePort, "XBee", &msgByte, 1);
+			printf("WROTE: %2x\n", msgByte);
+			usleep(1000); // 1ms
+			while(read(xbeePort, buffer, sizeof(char)) == sizeof(char)) {
+			
+				printf("READ: %2x\n", buffer[0]);
+				totalMsgs++;
+				usleep(1000); // 1ms
+			
 			}
-
-			printf("got ACK, handshake complete!\n");
+			printf("TTL: %10lu\n", totalMsgs);			
 	
 		}
 
@@ -808,7 +797,7 @@ int checkMessages(int msgPort, messageState *msg) {
 
 	if(msg->readBytes < msg->length) { // Message is not finished being read
 
-		if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
+		if(read(xbeePort, &testByte, sizeof(char)) == sizeof(char)) {  // We read a byte, so process it
 
 			#if DEBUG_LEVEL == 1
 			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x\n", msg->readBytes, msg->length, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
