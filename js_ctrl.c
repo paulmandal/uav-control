@@ -255,7 +255,7 @@ int main (int argc, char **argv)
 
 				if(!checkMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
 
-					usleep(100); // If nothing is there pause for 100usec, handshake is sent out by interrupt at 50Hz
+					usleep(50); // If nothing is there pause for 100usec, handshake is sent out by interrupt at 50Hz
 
 				};
 
@@ -274,11 +274,11 @@ int main (int argc, char **argv)
 		#endif
 		
 		int x;
-		for(x = 0 ; x < 10 ; x++) {  // Try to read 10 bytes per loop
+		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {  // Try to read MSG_BUFFER_SIZE bytes per loop
 
 			if(!checkMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
 
-				usleep(100); // If there was nothing pending pause for 100usec, max pause per loop is 1,000usec = 1ms
+				usleep(1); // If there was nothing pending pause for 100usec, max pause per loop is 1,000usec = 1ms
 			};  
 
 		}
@@ -788,7 +788,7 @@ int checkMessages(int msgPort, messageState *msg) {
 		if(read(xbeePort, &testByte, 1) == 1) {  // We read a byte, so process it
 
 			#if DEBUG_LEVEL == 1
-			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x", msg->readBytes, msg->length, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
+			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x\n", msg->readBytes, msg->length, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
 			#endif		
 
 			msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
@@ -956,9 +956,6 @@ void sendCtrlUpdate(int signum) {
 
 		writePortMsg(xbeePort, "XBee", xbeeMsg, msgSize); // Write out message to XBee
 		free(xbeeMsg); // Deallocate memory for xbeeMsg
-		#if DEBUG_LEVEL == 1
-		printf("CSLA: %3d/%3d\n", commandsSinceLastAck, debugCommandsPerAck);
-		#endif
 		commandsSinceLastAck++;
 	
 	} else {  // We aren't synced up, send sync msg
