@@ -23,11 +23,12 @@
 
 /* This is the defining moment of the file */
 
-#define DEBUG_LEVEL 3   // 1 - Messaging debugging
+#define DEBUG_LEVEL 4   // 1 - Messaging debugging
                         // 2 - Servo / pin output
                         // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
-                        // 4 - PPM registers
-                        // 5 - PPM pulse values
+                        // 4 - Signal continuity (with serial output)
+                        // 5 - PPM registers
+                        // 6 - PPM pulse values
 #define DEBUG_PIN1  4   // Pin for debug signaling   
                      
 
@@ -39,6 +40,7 @@
 #define MSG_TYPE_CTRL 0x01                    // Control update message type indicator
 #define MSG_TYPE_CFG  0x02		      // Configuration update
 #define MSG_TYPE_PPZ  0x03                    // Message from PPZ
+#define MSG_TYPE_DBG  0x04                    // Debug message
 #define MSG_TYPE_SYNC 0xFE                    // Sync message type indicator
 #define MSG_BUFFER_SIZE 256 		      // Message buffer size in bytes
 #define MSG_HEADER_SIZE 4     		      // Message header size in bytes
@@ -49,7 +51,6 @@
 #define SERVO_COUNT 8       // # of servos
 #define BUTTON_COUNT 12     // # of buttons on controller
 
-#define PPM_PIN 23          // Pin to output PPM signal on
 #define PPM_MIN_PULSE 1000  // Min pulse length (1ms)
 #define PPM_MAX_PULSE 2000  // Max pulse length (2ms)
 #define PPM_HIGH_PULSE 200  // Delay between pulses (200us)
@@ -116,7 +117,7 @@ void setup() {
   initControlState();        // Initialise control state
   initOutputs();             // Initialise outputs
   initPPM();                 // Set default PPM pulses
-  initMessage(&xbeeMsg);      // Init our message header
+  initMessage(&xbeeMsg);     // Init our message header
   Serial.begin(115200);      // Open XBee/GCS Serial
   Serial.flush();
   #if DEBUG_LEVEL > 0
@@ -134,7 +135,7 @@ void setup() {
   Serial1.println("Open for debugging mode..");  // Let them know we're ready
   #endif
   
-  #if DEBUG_LEVEL == 3
+  #if DEBUG_LEVEL == 3 || DEBUG_LEVEL == 4
   pinMode(DEBUG_PIN1, OUTPUT);  //  DEBUG - Pin will light permanently if signal is lost
   #endif
 
@@ -188,7 +189,6 @@ void initPPM() {
 
   int x;
   int midPPMPulse = (PPM_MIN_PULSE + PPM_MAX_PULSE) / 2;  
-  pinMode(PPM_PIN,OUTPUT);  // Setup PPM output Pin
 
   for (x = 0 ; x < (SERVO_COUNT + 1) ; x++) {
     
@@ -334,6 +334,8 @@ void processMessage(unsigned char *message, int length) {
         Serial1.println(commandsSinceLastAck);
 	#endif
 
+        commandsSinceLastAck++;
+
 	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
 		 sendAck(); // Send ACK for the SYNC signal
@@ -345,6 +347,8 @@ void processMessage(unsigned char *message, int length) {
 		/* MSG structure - [BEGIN_MSG] [MSG_TYPE] [SERVOS] [BUTTONS] [CHECKSUM]
 	         * BEGIN_MSG - 1 byte  - 1 byte msg marker
 		 * MSG_TYPE  - 1 byte  - 1 byte msg type marker
+                 * MSG_LEN   - 1 byte  - 1 byte msg length
+                 * HDR_CHK   - 1 byte  - 1 byte msg header checksum
 	         * SERVOS    - 8 bytes - 1 byte per servo
 	         * BUTTONS   - 3 bytes - 2 bits per pin (allow more than on/off, e.g. 3-pos switch)
 	         * CHECKSUM  - 1 byte  - 1 byte XOR checksum
@@ -352,16 +356,16 @@ void processMessage(unsigned char *message, int length) {
           
 	        for(x = 0 ; x < SERVO_COUNT ; x++) {
 
-	          servos[x] = message[x + 2]; // Set latest servo values from msg
+	          servos[x] = message[x + MSG_HEADER_SIZE]; // Set latest servo values from msg
 
 	        }
 
 	        for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
 
-	          buttons[(x * 4)] = (message[x + 10] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
-	          buttons[(x * 4) + 1] = (message[x + 10] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
-		  buttons[(x * 4) + 2] = (message[x + 10] & B00001100) >> 2; // Same
-	          buttons[(x * 4) + 3] = (message[x + 10] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
+	          buttons[(x * 4)] = (message[x + SERVO_COUNT + MSG_HEADER_SIZE] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
+	          buttons[(x * 4) + 1] = (message[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
+		  buttons[(x * 4) + 2] = (message[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00001100) >> 2; // Same
+	          buttons[(x * 4) + 3] = (message[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
 
 	        }
 
@@ -370,6 +374,12 @@ void processMessage(unsigned char *message, int length) {
 	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
 	} else if(msgType == MSG_TYPE_CFG) { // Handle configuration message
 	}
+
+        if(commandsSinceLastAck > CMDS_PER_ACK) {
+          
+           sendAck();  // Send an ACK since we've passed the CMDS_PER_ACK limit (note sendAck will zero out commandsSinceLastAck)
+           
+        }
 
 }
 
@@ -513,14 +523,14 @@ void checkSignal() {
       cli(); // Do not allow timer ppm disabling to be interrupted
       lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
       ppmON = false;                                   // Disable PPM
-      DDRD  &= B11011111;                              // Disable output on OC1A
+      DDRD  &= B11011111;                              // Disable output on OC1A      
       TIMSK1 = B00000000;                              // Disable interrupt on compare match
       TCCR1A = B00000000;                              // Disable fast PWM
       TCCR1B = B00000000;                              // Disable fast PWM, clock, and prescaler
-      #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 3
+      #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
       Serial1.println("Lost signal due to lastMsgTime timeout!");
       #endif
-      #if DEBUG_LEVEL == 3
+      #if DEBUG_LEVEL == 4
       Serial1.print("commandsSinceLastAck: ");
       Serial1.print(commandsSinceLastAck);
       Serial1.print("currentTime: ");
@@ -533,7 +543,7 @@ void checkSignal() {
       Serial1.println(LOST_MSG_THRESHOLD);
       #endif
       statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
-      #if DEBUG_LEVEL == 3
+      #if DEBUG_LEVEL == 3 || DEBUG_LEVEL == 4
       digitalWrite(DEBUG_PIN1, HIGH);
       #endif
       sei(); // Re-enable interrupts
@@ -546,7 +556,7 @@ void checkSignal() {
 
         cli();  // This shouldn't get interrupted since PPM is off but just to be safe..
 
-        #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 3
+        #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
         Serial1.println("Restarting PPM, lostSignal = false");
         #endif        
 
