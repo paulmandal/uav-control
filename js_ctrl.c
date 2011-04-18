@@ -52,7 +52,7 @@ Adruino:
 
 /* Definitions */
 
-#define DEBUG_LEVEL 1	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 0	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Debug messaging/handshaking
 			      // Debug level - 2 - Debug joystick position info
 
@@ -64,6 +64,7 @@ Adruino:
 #define MSG_TYPE_CTRL 0x01    // Control update message type indicator
 #define MSG_TYPE_CFG  0x02    // Configuration update
 #define MSG_TYPE_PPZ  0x03    // Message from PPZ
+#define MSG_TYPE_DBG  0x04    // Debug message
 #define MSG_TYPE_SYNC 0xFE    // Sync message type indicator
 #define MSG_BUFFER_SIZE 256   // Message buffer size in bytes
 #define MSG_HEADER_SIZE 4     // Message header size in bytes
@@ -855,6 +856,7 @@ int checkMessages(int msgPort, messageState *msg) {
 void processMessage(unsigned char *message, int length) {
 
 	unsigned char msgType = message[1];
+	int x;
 
 	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
@@ -867,6 +869,15 @@ void processMessage(unsigned char *message, int length) {
 	} else if(msgType == MSG_TYPE_CTRL) { // We shouldn't get this from the Arduino
 	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
 	} else if(msgType == MSG_TYPE_CFG) { // This either
+	} else if(msgType == MSG_TYPE_DBG) { // This is a debug message, print it
+	
+		printf("DEBUG MSG from UAV: ");
+		for(x = MSG_HEADER_SIZE ; x < length - 1 ; x++) {
+		
+			printf("%c", message[x]);
+		
+		}
+		printf("\n");
 	}
 
 }
@@ -876,7 +887,6 @@ void processMessage(unsigned char *message, int length) {
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize) {
 
 	int msgWrote = 0;
-	int x;
 	#if DEBUG_LEVEL == 21
 	printf("WRITING[%2d]: ", messageSize);
 	for(x = 0 ; x < messageSize ; x++) {

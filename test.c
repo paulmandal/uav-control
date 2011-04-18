@@ -244,12 +244,14 @@ int main (int argc, char **argv)
 
 			unsigned long totalMsgs = 0;
 			unsigned char msgByte;
+			unsigned char counter = 0;
 			unsigned char buffer[2];
-			msgByte = (unsigned char)(rand() % 255);
+			msgByte = counter;
+			counter++;
 			writePortMsg(xbeePort, "XBee", &msgByte, 1);
 			printf("WROTE: %2x\n", msgByte);
-			usleep(1000); // 1ms
-			while(read(xbeePort, buffer, sizeof(char)) == sizeof(char)) {
+			usleep(5000); // 5ms
+			if(read(xbeePort, buffer, sizeof(char)) == sizeof(char)) {
 			
 				printf("READ: %2x\n", buffer[0]);
 				totalMsgs++;
