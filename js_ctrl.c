@@ -52,9 +52,10 @@ Adruino:
 
 /* Definitions */
 
-#define DEBUG_LEVEL 0	      // Debug level - tells compiler to include or exclude debug message code
-			      // Debug level - 1 - Debug messaging/handshaking
+#define DEBUG_LEVEL 1	      // Debug level - tells compiler to include or exclude debug message code
+			      // Debug level - 1 - Lost signal debug
 			      // Debug level - 2 - Debug joystick position info
+			      // Debug level - 3 - Debug incoming messages
 
 #define VERSION_MAJOR 2       // Version information, Major #
 #define VERSION_MINOR 9       // Minor #
@@ -811,7 +812,7 @@ int checkMessages(int msgPort, messageState *msg) {
 
 		if(read(xbeePort, &testByte, sizeof(char)) == sizeof(char)) {  // We read a byte, so process it
 
-			#if DEBUG_LEVEL == 1
+			#if DEBUG_LEVEL == 3
 			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x\n", msg->readBytes, msg->length, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
 			#endif		
 
@@ -862,8 +863,8 @@ void processMessage(unsigned char *message, int length) {
 
 		handShook = 1;
 		commandsSinceLastAck = 0;
-		#if DEBUG_LEVEL == 1
-		printf("CSLA: %3d/%3d\n", commandsSinceLastAck, debugCommandsPerAck);
+		#if DEBUG_LEVEL == 3
+		printf("Got sync msg, CSLA: %3d/%3d\n", commandsSinceLastAck, debugCommandsPerAck);
 		#endif
 
 	} else if(msgType == MSG_TYPE_CTRL) { // We shouldn't get this from the Arduino
@@ -944,7 +945,7 @@ int testChecksum(unsigned char *message, int length) {
 	unsigned int checksum = 0x00;
 	int x;
 
-	#if DEBUG_LEVEL == 1
+	#if DEBUG_LEVEL == 3
 	printf("CHKMSG[%2d]: ", length);
 	for(x = 0 ; x < length ; x++) {
 
@@ -960,7 +961,7 @@ int testChecksum(unsigned char *message, int length) {
 
 	}
 
-	#if DEBUG_LEVEL == 1
+	#if DEBUG_LEVEL == 3
 	printf("%2x\n\n", checksum); // Print the checksum
 	#endif	
 
