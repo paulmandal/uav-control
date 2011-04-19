@@ -70,25 +70,26 @@
 unsigned int servos[SERVO_COUNT];        // store servo states
 unsigned int buttons[BUTTON_COUNT];      // store button states
 
-boolean lostSignal = true;               // lostSignal state
-unsigned long lastMsgTime = 0;           // Time of last legit message
+boolean lostSignal = true;      // lostSignal state
+unsigned long lastMsgTime = 0;  // Time of last legit message
 
-unsigned long navlightInterval = NAVLIGHT_INTERVAL; // Interval for navigation lights
+unsigned int navlightInterval = NAVLIGHT_INTERVAL; // Interval for navigation lights
 unsigned long navlightLastTime = 0;      // Navigation light last 
 boolean navlightState = false;           // Navigation light LED state
 boolean navlightEnabled = false;         // Enable/disable navigation lights
 
 unsigned long lastStatusLEDTime = 0;     // Time of last status LED change
-unsigned long statusLEDInterval = STATUS_INTERVAL_OK; // Current status LED toggle interval
+unsigned int statusLEDInterval = STATUS_INTERVAL_OK; // Current status LED toggle interval
 boolean statusLEDState = false;          // Status LED state
 
 volatile byte currentPulse = 0;        // The pulse being sent
-boolean  ppmON = false;
-unsigned int pulses[PPM_PULSES];        // PPM pulses
+byte startPulse = 0;          // This is ugly and I don't like it
+volatile boolean ppmON = false;
+volatile int pulses[PPM_PULSES];        // PPM pulses
 
 messageState xbeeMsg;
 
-int commandsSinceLastAck = 0;
+volatile int commandsSinceLastAck = 0;
 
 /* Arduino is racist against function prototypes 
 
@@ -96,6 +97,7 @@ void initControlState();
 void initPPM();
 void initOutputs();
 boolean initMessage(messageState *message);
+void initTimer();
 boolean checkMessages(messageState *msg);
 void processMessage(unsigned char *message, int length);
 unsigned char generateChecksum(unsigned char *message, int length);
@@ -118,6 +120,7 @@ void setup() {
   initOutputs();             // Initialise outputs
   initPPM();                 // Set default PPM pulses
   initMessage(&xbeeMsg);     // Init our message header
+  initTimer();               // Init our timer
   Serial.begin(115200);      // Open XBee/GCS Serial
   Serial.flush();
   #if DEBUG_LEVEL > 0
@@ -192,7 +195,7 @@ void initPPM() {
 
   for (x = 0 ; x < (SERVO_COUNT + 1) ; x++) {
     
-    pulses[x * 2] = PPM_HIGH_PULSE + x;  // DEBUG
+    pulses[x * 2] = PPM_HIGH_PULSE;  // DEBUG
     pulses[(x * 2) + 1] = midPPMPulse; // Set all PPM pulses to halfpulse
     
   }
@@ -458,7 +461,7 @@ void sendAck() {
 	msgSync[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
 	msgSync[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
         msgSync[2] = msgSize; // Message length
-        msgSync[3] = generateChecksum(msgSync, 3); // Header checksum
+        msgSync[3] = generateChecksum(msgSync, MSG_HEADER_SIZE - 1); // Header checksum
         for(x = 4 ; x < msgSize ; x++) { 
 
 		msgSync[x] = (unsigned char)random(0, 254); // Fill all but the last character with random bytes
@@ -556,27 +559,36 @@ void checkSignal() {
 
         cli();  // This shouldn't get interrupted since PPM is off but just to be safe..
 
+        ppmON = true;                           // turn on PPM status flag
+        statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+
         #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
         Serial1.println("Restarting PPM, lostSignal = false");
         #endif        
+        
+        TCCR1B = B00001000;                     // CTC, clock disabled, OCR1A has our value for pulse[0] but will never be reached by TCNT1 'coz no clock
+        TCCR1A = B11000000;                     // CTC, set OC1A HIGH on match
+
+        OCR1A = 0xFFFF;                         // Make OCR1A max so it doesn't get hit
+        TCNT1 = 0x0000;                         // Make TCNT1 0 so it doesn't hit OCR1A
 
         DDRD  |= B00100000;                     // Enable output on OC1A
-        TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A        
-
-    	ppmON = true; 
-	TCNT1 = 0;				// Zero out counter, shouldn't matter but just in case                          
-        OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
-	currentPulse = 1;                       // Set currentPulse to 1 since there will be no ISR() call to increment it
-
-        TCCR1A = B11000000;                     // CTC, set OC1A HIGH on match
-        TCCR1B = B00001000;                     // CTC, clock disabled, OCR1A has our value for pulse[0] but will never be reached by TCNT1 'coz no clock
 
         TCCR1C = B10000000;                     // Force match, should set pin high, WILL NOT generate ISR() call        
 
+        OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
+	currentPulse = startPulse;              // Set currentPulse to 0 if it's the firs time 1 otherwise, since there will be no ISR() call to increment it
+                                                // This is ugly and I don't like it
+  
+        TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A               
         TCCR1A = B01000011;                     // Fast PWM mode, will generate ISR() when it reaches OCR1A (pulse[0]), thus starting the PPM signal
-        TCCR1B = B00011010;                     // Fast PWM, plus 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)
-	statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+        TCCR1B = B00011010;                     // Fast PWM, 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)        
         sei(); // Re-enable interrupts
+        if(startPulse == 0) {
+          
+          startPulse = 1;
+          
+        }
     
     }
     
@@ -588,7 +600,7 @@ void checkSignal() {
 
 void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
 
-  unsigned int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
+  int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
   pulses[(index * 2) + 1] = mappedPulse; // Store new pulse width
 
 }
@@ -627,6 +639,70 @@ void handleControlUpdate() {
     
   }
   #endif
+  
+}
+
+/* Write a debug message back to the XBee port */
+
+boolean writeDebugMsg(char *message) {
+   
+ int length = 0;
+ int x;
+ int fullLength = 0;
+ boolean foundLength = false;
+
+ while(length < 512 && !foundLength) {
+   
+   if(message[length] == '\0') { // Found end of message;
+   
+      foundLength = true;
+   
+   }
+   
+   length++;   
+   
+ }
+ 
+ fullLength = length + MSG_HEADER_SIZE + 1;  // Add MSG_HEADER_SIZE to our required size and +1 for the final checksum
+ 
+ unsigned char *outputMsg;
+ 
+ if((outputMsg = (unsigned char*)calloc(fullLength, sizeof(char))) != NULL) {  // Attempt to allocate memory for outputMsg
+
+   outputMsg[0] = MSG_BEGIN; // Message construction 
+   outputMsg[1] = MSG_TYPE_DBG; // Specify message type
+   outputMsg[2] = fullLength;  // Message size
+   outputMsg[3] = generateChecksum(outputMsg, MSG_HEADER_SIZE - 1);  // Header checksum
+   for(x = 0 ; x < length ; x++) {
+     
+     outputMsg[x + MSG_HEADER_SIZE] = (unsigned char)message[x]; // Get the rest of the message
+     
+   } 
+   
+   outputMsg[fullLength - 1] = generateChecksum(outputMsg, fullLength - 1); // Fill in our checksum for the whole message
+   
+   Serial.write(outputMsg, fullLength);  // Write out the message
+   
+   free(outputMsg);  // Deallocate memory for outputMsg
+   return true;
+   
+ } else {
+   
+   return false;  // Failed to write the message
+   
+ }
+  
+}
+
+/* Init our timer */
+void initTimer() {
+  
+  cli();   
+  DDRD  &= B11011111; // Disable output on OC1A      
+  TIMSK1 = B00000000; // Disable interrupt on compare match
+  TCCR1A = B00000000; // Disable fast PWM
+  TCCR1B = B00000000; // Disable fast PWM, clock, and prescaler
+  sei();
   
 }
 
