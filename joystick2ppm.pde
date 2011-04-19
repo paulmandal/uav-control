@@ -79,7 +79,7 @@ boolean navlightState = false;           // Navigation light LED state
 boolean navlightEnabled = false;         // Enable/disable navigation lights
 
 unsigned long lastStatusLEDTime = 0;     // Time of last status LED change
-unsigned int statusLEDInterval = STATUS_INTERVAL_OK; // Current status LED toggle interval
+unsigned int statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Current status LED toggle interval
 boolean statusLEDState = false;          // Status LED state
 
 volatile byte currentPulse = 0;        // The pulse being sent
@@ -526,10 +526,13 @@ void checkSignal() {
       cli(); // Do not allow timer ppm disabling to be interrupted
       lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
       ppmON = false;                                   // Disable PPM
-      DDRD  &= B11011111;                              // Disable output on OC1A      
       TIMSK1 = B00000000;                              // Disable interrupt on compare match
-      TCCR1A = B00000000;                              // Disable fast PWM
+      TCCR1A = B00000000;                              // Disable fast PWM     
       TCCR1B = B00000000;                              // Disable fast PWM, clock, and prescaler
+      
+      TCCR1A = B10000000;                              // Set the pin to go low on compare match
+      TCCR1C = B10000000;                              // Force match, this will force the pin low
+      DDRD  &= B11011111;                              // Disable output on OC1A      
       #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
       Serial1.println("Lost signal due to lastMsgTime timeout!");
       #endif
@@ -566,19 +569,18 @@ void checkSignal() {
         Serial1.println("Restarting PPM, lostSignal = false");
         #endif        
         
-        TCCR1B = B00001000;                     // CTC, clock disabled, OCR1A has our value for pulse[0] but will never be reached by TCNT1 'coz no clock
-        TCCR1A = B11000000;                     // CTC, set OC1A HIGH on match
+        TCCR1B = B00000000;                     // Normal mode, clock disabled, OCR1A will never be reached by TCNT1 'coz no clock is running
+        TCCR1A = B11000000;                     // Normal, set OC1A HIGH on match
 
         OCR1A = 0xFFFF;                         // Make OCR1A max so it doesn't get hit
-        TCNT1 = 0x0000;                         // Make TCNT1 0 so it doesn't hit OCR1A
-
-        DDRD  |= B00100000;                     // Enable output on OC1A
 
         TCCR1C = B10000000;                     // Force match, should set pin high, WILL NOT generate ISR() call        
 
         OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
 	currentPulse = startPulse;              // Set currentPulse to 0 if it's the firs time 1 otherwise, since there will be no ISR() call to increment it
-                                                // This is ugly and I don't like it
+                                                // This is ugly and I don't like 
+
+        DDRD  |= B00100000;                     // Enable output on OC1A
   
         TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A               
         TCCR1A = B01000011;                     // Fast PWM mode, will generate ISR() when it reaches OCR1A (pulse[0]), thus starting the PPM signal
