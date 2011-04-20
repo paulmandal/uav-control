@@ -34,12 +34,12 @@
 
 #define VERSION_MAJOR 2     // Major version #
 #define VERSION_MINOR 9     // Minor #
-#define VERSION_MOD   3     // Mod #
+#define VERSION_MOD   5     // Mod #
 
 #define MSG_BEGIN     0xFF                    // Begin of control message indicator byte
 #define MSG_TYPE_CTRL 0x01                    // Control update message type indicator
 #define MSG_TYPE_CFG  0x02		      // Configuration update
-#define MSG_TYPE_PPZ  0x03                    // Message from PPZ
+#define MSG_TYPE_PPZ  0x03                    // Message to/from PPZ
 #define MSG_TYPE_DBG  0x04                    // Debug message
 #define MSG_TYPE_SYNC 0xFE                    // Sync message type indicator
 #define MSG_BUFFER_SIZE 256 		      // Message buffer size in bytes
@@ -83,11 +83,14 @@ unsigned int statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Current status 
 boolean statusLEDState = false;          // Status LED state
 
 volatile byte currentPulse = 0;        // The pulse being sent
-byte startPulse = 0;          // This is ugly and I don't like it
 volatile boolean ppmON = false;
 volatile int pulses[PPM_PULSES];        // PPM pulses
 
-messageState xbeeMsg;
+messageState xbeeMsg;  // Message struct for messages from XBee line
+messageState ppzMsg;  // Message struct for messages from PPZ line
+#if DEBUG_LEVEL > 0
+messageState dbgMsg;  // Message struct for outgoing debug messages
+#endif
 
 volatile int commandsSinceLastAck = 0;
 
@@ -98,7 +101,7 @@ void initPPM();
 void initOutputs();
 boolean initMessage(messageState *message);
 void initTimer();
-boolean checkMessages(messageState *msg);
+boolean checkXBeeMessages(messageState *msg);
 void processMessage(unsigned char *message, int length);
 unsigned char generateChecksum(unsigned char *message, int length);
 boolean testChecksum(unsigned char *message, int length);
@@ -113,34 +116,30 @@ void handleControlUpdate();*/
 
 void setup() {
 
-  delay(100);                // Wait 100ms since some of our timers use millis() and it starts at 0.  They expect more from it.  They're disappoint.
-                             // This also gives PuTTY (using for diag on 2nd UART) time to open and connect
-  randomSeed(analogRead(0)); // Seed our random number gen with an unconnected pins static
-  initControlState();        // Initialise control state
-  initOutputs();             // Initialise outputs
-  initPPM();                 // Set default PPM pulses
-  initMessage(&xbeeMsg);     // Init our message header
-  initTimer();               // Init our timer
-  Serial.begin(115200);      // Open XBee/GCS Serial
-  Serial.flush();
-  #if DEBUG_LEVEL > 0
-  Serial1.begin(115200);      // Open PPZ port as debug
-  Serial1.println();  // Give us a little space in the output terminal / monitor
-  Serial1.println();
-  Serial1.println();
-  Serial1.print("joystick2ppm version ");  // Output version info
-  Serial1.print(VERSION_MAJOR);
-  Serial1.print(".");
-  Serial1.print(VERSION_MINOR);
-  Serial1.print(".");
-  Serial1.print(VERSION_MOD);
-  Serial1.println("...");
-  Serial1.println("Open for debugging mode..");  // Let them know we're ready
-  #endif
+	delay(100);                         // Wait 100ms since some of our timers use millis() and it starts at 0.  They expect more from it.  They're disappoint.
+                                      // This also gives PuTTY (using for diag on 2nd UART) time to open and connect
+	randomSeed(analogRead(0));          // Seed our random number gen with an unconnected pins static
+	initControlState();                 // Initialise control state
+	initOutputs();                      // Initialise outputs
+	initPPM();                          // Set default PPM pulses
+	initMessage(&xbeeMsg);              // Init our XBee message
+	initMessage(&ppzMsg);               // Init our PPZ message
+	ppzMsg.readBytes = MSG_HEADER_SIZE; // Leave room for header addition to PPZ message
+	initTimer();                        // Init our timer
+	Serial.begin(115200);               // Open XBee/GCS Serial
+	Serial.flush();
+	Serial1.begin(115200);              // Open PPZ Serial
+	Serial1.flush();
   
-  #if DEBUG_LEVEL == 3 || DEBUG_LEVEL == 4
-  pinMode(DEBUG_PIN1, OUTPUT);  //  DEBUG - Pin will light permanently if signal is lost
-  #endif
+	#if DEBUG_LEVEL > 0
+	initMessage(&dbgMsg);      // Init our debug message
+	snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----joystick2ppm version %d.%d.%d... Open for debugging mode...-", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Write a debug message leading and trailing dashes will be replaced with header and checksums
+	writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);  // Send debug message
+	#endif
+  
+	#if DEBUG_LEVEL == 3 || DEBUG_LEVEL == 4
+	pinMode(DEBUG_PIN1, OUTPUT);  //  DEBUG - Pin will light permanently if signal is lost
+	#endif
 
 }
 
@@ -148,17 +147,18 @@ void setup() {
 
 void loop() {
 
-  int x;
-  updateStatusLED();        // Check if we need to toggle the status LED
-  updateNavigationLights(); // Update Navigation lights
+	int x;
+	updateStatusLED();        // Check if we need to toggle the status LED
+	updateNavigationLights(); // Update Navigation lights
 
-  for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessages() should be run with a much higher frequency than the LED updates or checkSignal()
+	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessage functions should be run with a much higher frequency than the LED updates or checkSignal()
   
-    checkMessages(&xbeeMsg);          // Check for incoming messages
+		checkXBeeMessages(&xbeeMsg);        // Check for incoming XBee messages
+		checkPPZMessages(&ppzMsg):		// Check for incoming PPZ messages
 
-  }
+	}
 
-  checkSignal();            // Check if the signal is still good
+	checkSignal();            // Check if the signal is still good
 
 }
 
@@ -168,21 +168,21 @@ void loop() {
 
 void initControlState() {
 
-int x;
+	int x;
 
-  // Zero out all buttons and servos
+  	// Zero out all buttons and servos
 
-  for(x = 0 ; x < SERVO_COUNT ; x++) {
+	for(x = 0 ; x < SERVO_COUNT ; x++) {
 
-    servos[x] = 0;
+		servos[x] = 0;
 
-  }
+	}
 
-  for(x = 0 ; x < BUTTON_COUNT	; x++) {
+	for(x = 0 ; x < BUTTON_COUNT ; x++) {
 
-    buttons[x] = 0;
+		buttons[x] = 0;
 
-  }
+	}
 
 }
 
@@ -190,28 +190,26 @@ int x;
 
 void initPPM() {
 
-  int x;
-  int midPPMPulse = (PPM_MIN_PULSE + PPM_MAX_PULSE) / 2;  
+	int x;
+	int midPPMPulse = (PPM_MIN_PULSE + PPM_MAX_PULSE) / 2;  
 
-  for (x = 0 ; x < (SERVO_COUNT + 1) ; x++) {
+	for (x = 0 ; x < (SERVO_COUNT + 1) ; x++) {
     
-    pulses[x * 2] = PPM_HIGH_PULSE;  // DEBUG
-    pulses[(x * 2) + 1] = midPPMPulse; // Set all PPM pulses to halfpulse
+		pulses[x * 2] = PPM_HIGH_PULSE;  // DEBUG
+		pulses[(x * 2) + 1] = midPPMPulse; // Set all PPM pulses to halfpulse
     
-  }
-  pulses[PPM_PULSES - 1] = PPM_SYNC_PULSE; // Sync pulse is before 0 length pulse
+	}
+	pulses[PPM_PULSES - 1] = PPM_SYNC_PULSE; // Sync pulse is before 0 length pulse
 
-  #if DEBUG_LEVEL == 5
-  for(x = 0 ; x < PPM_PULSES ; x++) {
+	#if DEBUG_LEVEL == 5
+	for(x = 0 ; x < PPM_PULSES ; x++) {
+   
+		snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d -", x, pulses[x]); // Build debug message
+		writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
     
-    Serial1.print("Pulse[");
-    Serial1.print(x);
-    Serial1.print("]: ");
-    Serial1.println(pulses[x]);
-    
-  }
-  #endif
-  currentPulse = 0; // init currentPulse
+	}
+	#endif
+	currentPulse = 0; // init currentPulse
 
 }
 
@@ -219,18 +217,18 @@ void initPPM() {
 
 void initOutputs() {
   
-  pinMode(STATUS_LED_PIN, OUTPUT); // Status LED Pin
-  pinMode(NAVLIGHT_PIN, OUTPUT);   // Navlight LED(s) Pin
+	pinMode(STATUS_LED_PIN, OUTPUT); // Status LED Pin
+	pinMode(NAVLIGHT_PIN, OUTPUT);   // Navlight LED(s) Pin
   
 }
 
 /* initMessage() - Initialise message */
 
-boolean initMessage(messageState *message) {
+boolean initMessage(messageState *msg) {
 
-	message->readBytes = 0;
-	message->length = MSG_HEADER_SIZE; // Init message.length as header length size
-	if((message->messageBuffer = (unsigned char*)calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
+	msg->readBytes = 0;
+	msg->length = MSG_HEADER_SIZE; // Init message.length as header length size
+	if((msg->messageBuffer = (unsigned char*)calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
 	
 		return true; // calloc() worked
 	
@@ -242,9 +240,9 @@ boolean initMessage(messageState *message) {
 	
 }
 
-/* checkMessages() - Check for and handle any incoming messages */
+/* checkXBeeMessages() - Check for and handle any incoming messages */
 
-boolean checkMessages(messageState *msg) {
+boolean checkXBeeMessages(messageState *msg) {
 
 	unsigned char testByte = 0x00;
 	
@@ -279,14 +277,8 @@ boolean checkMessages(messageState *msg) {
 			testByte = Serial.read();  // Read our byte		
 
 			#if DEBUG_LEVEL == 1
-			Serial1.print("BYTE[");
-			Serial1.print(msg->readBytes);
-			Serial1.print("/");
-			Serial1.print(msg->length);
-			Serial1.print(" - CSLA:");
-			Serial1.print(commandsSinceLastAck);
-			Serial1.print("]: ");
-			Serial1.println(testByte, HEX);
+			snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----BYTE[%d/%d - CSLA: %d]: %x-", msg->readBytes, msg->length, commandsSinceLastAck, testByte); // Build debug message
+			writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
 			#endif		
 
 			msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
@@ -325,16 +317,59 @@ boolean checkMessages(messageState *msg) {
 
 }
 
+/* checkPPZMessages() - Check for and handle any incoming PPZ messages */
+
+boolean checkPPZMessages(messageState *msg) {
+
+	unsigned char testByte = 0x00;
+	
+	if(Serial1.available() > 0) {
+
+		testByte = Serial1.read();  // Read our byte		
+
+		#if DEBUG_LEVEL == 1
+		snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----PPZBYTE[%d - CSLA: %d]: %x-", dbgMsg.readBytes, commandsSinceLastAck, testByte);
+		writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);
+		#endif		
+
+		msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
+		msg->readBytes++;			       // Increment readBytes
+		
+		if(testByte == '\0') { // This is the message end, relay the message to GCS and reset dbgMsg
+		
+			writeXBeeMessage(msg, MSG_TYPE_PPZ);
+			msg->readBytes = MSG_HEADER_SIZE;  // Leave room for header to be added
+			int x;	
+
+			// Clear out message so it's ready to be used again	
+			for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
+
+				msg->messageBuffer[x] = '\0';
+
+			}
+		
+		}
+	
+		return true;
+	
+	} else {
+
+		return false;
+	
+	}
+
+}
+
 /* processMessage(message, length) - Do whatever the message tells us to do */
 
-void processMessage(unsigned char *message, int length) {
+void processMessage(messageState *msg) {
 
         int x;
-	unsigned char msgType = message[1];
+	unsigned char msgType = msg->messageBuffer[1];
 
 	#if DEBUG_LEVEL == 1
-        Serial1.print("CSLA: ");
-        Serial1.println(commandsSinceLastAck);
+	snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CSLA: %d-", commandsSinceLastAck); // Build debug message
+	writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                                // Write debug message
 	#endif
 
         commandsSinceLastAck++;
@@ -359,22 +394,25 @@ void processMessage(unsigned char *message, int length) {
           
 	        for(x = 0 ; x < SERVO_COUNT ; x++) {
 
-	          servos[x] = message[x + MSG_HEADER_SIZE]; // Set latest servo values from msg
+	          servos[x] = msg->messageBuffer[x + MSG_HEADER_SIZE]; // Set latest servo values from msg
 
 	        }
 
 	        for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
 
-	          buttons[(x * 4)] = (message[x + SERVO_COUNT + MSG_HEADER_SIZE] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
-	          buttons[(x * 4) + 1] = (message[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
-		  buttons[(x * 4) + 2] = (message[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00001100) >> 2; // Same
-	          buttons[(x * 4) + 3] = (message[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
+	          buttons[(x * 4)] = (msg->messageBuffer[x + SERVO_COUNT + MSG_HEADER_SIZE] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
+	          buttons[(x * 4) + 1] = (msg->messageBuffer[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
+		  buttons[(x * 4) + 2] = (msg->messageBuffer[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00001100) >> 2; // Same
+	          buttons[(x * 4) + 3] = (msg->messageBuffer[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
 
 	        }
 
                 handleControlUpdate();
 
 	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
+	
+		writePPZMessage(msg);
+	
 	} else if(msgType == MSG_TYPE_CFG) { // Handle configuration message
 	}
 
@@ -411,23 +449,22 @@ int testChecksum(unsigned char *message, int length) {
 	int x;
 
 	#if DEBUG_LEVEL == 1
-	Serial1.print("CHKMSG: ");
+	snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHKMSG:-"); // Build debug message
+	writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
 	#endif
 
 	for(x = 0 ; x < length ; x++) {
 
 		#if DEBUG_LEVEL == 1
-		Serial1.print((unsigned int)message[x], HEX);
-		Serial1.print(" ");
+		snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----%x-", (unsigned int)message[x]); // Build debug message
+		writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
 		#endif
                 checksum = checksum ^ (unsigned int)message[x];  // Test this message against its checksum (last byte)
 
 	}
 	#if DEBUG_LEVEL == 1
-	Serial1.print("CHK: ");
-	Serial1.println(checksum, HEX);
-        Serial1.print("CSLA: ");
-        Serial1.println(commandsSinceLastAck);
+	snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHK: %x CSLA: %d-", checksum, commandsSinceLastAck); // Build debug message
+	writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
 	#endif
 
 	if(checksum == 0x00) {
@@ -454,8 +491,9 @@ void sendAck() {
         
         msgSync = (unsigned char*)calloc(msgSize, sizeof(char)); // Allocate memory for sync msg
         
-        #if DEBUG_LEVEL == 1	
-	Serial1.println("Sending SYNC ACK");
+        #if DEBUG_LEVEL == 1
+      	snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Sending SYNC ACK:-"); // Build debug message
+	writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                   // Write debug message
 	#endif 
 
 	msgSync[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
@@ -480,14 +518,14 @@ void sendAck() {
 
 void updateStatusLED() {
 
-  unsigned long currentTime = millis(); // get current time
-  if(currentTime - lastStatusLEDTime > statusLEDInterval) {
+	unsigned long currentTime = millis(); // get current time
+	if(currentTime - lastStatusLEDTime > statusLEDInterval) {
 
-    lastStatusLEDTime = currentTime;              // If more time than statusLEDInterval has passed, replace lastStatusLEDTime with currentTime
-    statusLEDState = !statusLEDState;             // Flip statusLEDState
-    digitalWrite(STATUS_LED_PIN, statusLEDState); // Display status LED
+		lastStatusLEDTime = currentTime;              // If more time than statusLEDInterval has passed, replace lastStatusLEDTime with currentTime
+		statusLEDState = !statusLEDState;             // Flip statusLEDState
+		digitalWrite(STATUS_LED_PIN, statusLEDState); // Display status LED
 
-  }
+	}
 
 }
 
@@ -495,22 +533,22 @@ void updateStatusLED() {
 
 void updateNavigationLights() {
 
-  if(navlightEnabled) {
+	if(navlightEnabled) {
     
-    unsigned long currentTime = millis(); // get current time
-    if(currentTime - navlightLastTime > navlightInterval) {
+		unsigned long currentTime = millis(); // get current time
+		if(currentTime - navlightLastTime > navlightInterval) {
 
-      navlightLastTime = currentTime;              // If more time than navlightInterval has passed, replace navlightLastTime with currentTime
-      navlightState = !navlightState;              // Flip navlightState
-      digitalWrite(NAVLIGHT_PIN, navlightState);   // Display navlight LED
+			navlightLastTime = currentTime;              // If more time than navlightInterval has passed, replace navlightLastTime with currentTime
+			navlightState = !navlightState;              // Flip navlightState
+			digitalWrite(NAVLIGHT_PIN, navlightState);   // Display navlight LED
 
-    }
+		}
   
-  } else {
+	} else {
     
-    digitalWrite(NAVLIGHT_PIN, false);  // Navlights are turned off
+		digitalWrite(NAVLIGHT_PIN, false);  // Navlights are turned off
     
-  }
+	}
 
 }
 
@@ -518,83 +556,71 @@ void updateNavigationLights() {
 
 void checkSignal() {
 
-  unsigned long currentTime = millis(); // get current time
-  if((currentTime - lastMsgTime) > LOST_MSG_THRESHOLD) {
+	unsigned long currentTime = millis(); // get current time
+	if((currentTime - lastMsgTime) > LOST_MSG_THRESHOLD) {
 
-    if(!lostSignal) {
+		if(!lostSignal) {
       
-      cli(); // Do not allow timer ppm disabling to be interrupted
-      lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
-      ppmON = false;                                   // Disable PPM
-      TIMSK1 = B00000000;                              // Disable interrupt on compare match
-      TCCR1A = B00000000;                              // Disable fast PWM     
-      TCCR1B = B00000000;                              // Disable fast PWM, clock, and prescaler
+			cli(); // Do not allow timer ppm disabling to be interrupted
+			lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
+			ppmON = false;                                   // Disable PPM
+			TIMSK1 = B00000000;                              // Disable interrupt on compare match
+			TCCR1A = B00000000;                              // Disable fast PWM     
+			TCCR1B = B00000000;                              // Disable fast PWM, clock, and prescaler
       
-      TCCR1A = B10000000;                              // Set the pin to go low on compare match
-      TCCR1C = B10000000;                              // Force match, this will force the pin low
-      DDRD  &= B11011111;                              // Disable output on OC1A      
-      #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
-      Serial1.println("Lost signal due to lastMsgTime timeout!");
-      #endif
-      #if DEBUG_LEVEL == 4
-      Serial1.print("commandsSinceLastAck: ");
-      Serial1.print(commandsSinceLastAck);
-      Serial1.print("currentTime: ");
-      Serial1.print(currentTime);
-      Serial1.print("lastMsgTime: ");
-      Serial1.print(lastMsgTime);
-      Serial1.print("diff: ");
-      Serial1.print(currentTime - lastMsgTime);
-      Serial1.print(" > ");
-      Serial1.println(LOST_MSG_THRESHOLD);
-      #endif
-      statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
-      #if DEBUG_LEVEL == 3 || DEBUG_LEVEL == 4
-      digitalWrite(DEBUG_PIN1, HIGH);
-      #endif
-      sei(); // Re-enable interrupts
+			TCCR1A = B10000000;                              // Set the pin to go low on compare match
+			TCCR1C = B10000000;                              // Force match, this will force the pin low
+			DDRD  &= B11011111;                              // Disable output on OC1A      
+			#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
+			snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "Restarting PPM, lostSignal = false"); // Build debug message
+			writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
+			#endif
+			#if DEBUG_LEVEL == 4
+			snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "commandsSinceLastAck: %d currentTime: %ul lastMsgTime: %ul diff: %ul > %d", commandsSinceLastAck, currentTime, lastMsgTime, currentTime - lastMsgTime, LOST_MSG_THRESHOLD); // Build debug message
+			writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
+			#endif
+			statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
+			#if DEBUG_LEVEL == 3 || DEBUG_LEVEL == 4
+			digitalWrite(DEBUG_PIN1, HIGH);
+			#endif
+			sei(); // Re-enable interrupts
       
-    }
+		}
 
-  } else {
+	} else {
     
-    if(!ppmON) {  // Restart PPM since it was off
+		if(!ppmON) {  // Restart PPM since it was off
 
-        cli();  // This shouldn't get interrupted since PPM is off but just to be safe..
+			cli();  // This shouldn't get interrupted since PPM is off but just to be safe..
 
-        ppmON = true;                           // turn on PPM status flag
-        statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+			ppmON = true;                           // turn on PPM status flag
+			statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
 
-        #if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
-        Serial1.println("Restarting PPM, lostSignal = false");
-        #endif        
+			#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
+			snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "Restarting PPM, lostSignal = false"); // Build debug message
+			writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
+			#endif        
         
-        TCCR1B = B00000000;                     // Normal mode, clock disabled, OCR1A will never be reached by TCNT1 'coz no clock is running
-        TCCR1A = B11000000;                     // Normal, set OC1A HIGH on match
+			TCCR1B = B00001000;                     // CTC mode, clock disabled, OCR1A will never be reached by TCNT1 'coz no clock is running
+			TCCR1A = B11000000;                     // CTC, set OC1A HIGH on match
 
-        OCR1A = 0xFFFF;                         // Make OCR1A max so it doesn't get hit
+			OCR1A = 0xFFFF;                         // Make OCR1A max so it doesn't get hit
 
-        TCCR1C = B10000000;                     // Force match, should set pin high, WILL NOT generate ISR() call        
+			TCCR1C = B10000000;                     // Force match, should set pin high, WILL NOT generate ISR() call        
 
-        OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
-	currentPulse = startPulse;              // Set currentPulse to 0 if it's the firs time 1 otherwise, since there will be no ISR() call to increment it
-                                                // This is ugly and I don't like 
+			OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
+			currentPulse = 1;                       // Set currentPulse to 1 since there will be no ISR() call to increment it
 
-        DDRD  |= B00100000;                     // Enable output on OC1A
+			DDRD  |= B00100000;                     // Enable output on OC1A
   
-        TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A               
-        TCCR1A = B01000011;                     // Fast PWM mode, will generate ISR() when it reaches OCR1A (pulse[0]), thus starting the PPM signal
-        TCCR1B = B00011010;                     // Fast PWM, 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)        
-        sei(); // Re-enable interrupts
-        if(startPulse == 0) {
-          
-          startPulse = 1;
-          
-        }
+			TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A               
+			TCCR1A = B01000011;                     // Fast PWM mode, will generate ISR() when it reaches OCR1A (pulse[0]), thus starting the PPM signal
+			TCCR1B = B00011010;                     // Fast PWM, 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)        
+			sei(); // Re-enable interrupts
     
-    }
+		}
     
-  }
+	}
 
 }
 
@@ -602,8 +628,8 @@ void checkSignal() {
 
 void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
 
-  int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
-  pulses[(index * 2) + 1] = mappedPulse; // Store new pulse width
+	int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
+	pulses[(index * 2) + 1] = mappedPulse; // Store new pulse width
 
 }
 
@@ -612,99 +638,97 @@ void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
 
 void handleControlUpdate() {
   
-  int x;
-  storePulse(0, servos[0], 0, 254);  // Write ESC #1
-  storePulse(1, servos[1], 0, 254);  // Write ESC #2
-  // Write all remaning servo pulses
-  for(x = 2 ; x < SERVO_COUNT ; x++) {
+	int x;
+	storePulse(0, servos[0], 0, 254);  // Write ESC #1
+	storePulse(1, servos[1], 0, 254);  // Write ESC #2
+	// Write all remaning servo pulses
+	for(x = 2 ; x < SERVO_COUNT ; x++) {
 
-    storePulse(x, servos[x], 0, 180);
+		storePulse(x, servos[x], 0, 180);
 
-  }
-  if(buttons[4] > 0) {
+	}
+	if(buttons[4] > 0) {
     
-    navlightEnabled = true;  // enable navlight if button 5 is on
+		navlightEnabled = true;  // enable navlight if button 5 is on
     
-  } else {
+	} else {
     
-    navlightEnabled = false; // otherwise disable it
+		navlightEnabled = false; // otherwise disable it
     
-  }
+	}
   
-  #if DEBUG_LEVEL == 5
-  for(x = 0 ; x < PPM_PULSES ; x++) {
+	#if DEBUG_LEVEL == 5
+	for(x = 0 ; x < PPM_PULSES ; x++) {
+
+		snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d-", x, pulses[x]); // Build debug message
+		writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
     
-    Serial1.print("Pulse[");
-    Serial1.print(x);
-    Serial1.print("]: ");
-    Serial1.println(pulses[x]);
-    
-  }
-  #endif
+	}
+	#endif
   
 }
 
-/* Write a debug message back to the XBee port */
+/* Write a message back to the XBee port */
 
-boolean writeDebugMsg(char *message) {
+void writeXBeeMessage(messageState *msg, unsigned char msgType) {
    
- int length = 0;
- int x;
- int fullLength = 0;
- boolean foundLength = false;
+	int length = 0;
+	int x;
+	int fullLength = 0;
+	boolean foundLength = false;
 
- while(length < 512 && !foundLength) {
+	while(length < MSG_BUFFER_SIZE && !foundLength) {
    
-   if(message[length] == '\0') { // Found end of message;
+		if(msg->messageBuffer[length] == '\0') { // Found end of message;
    
-      foundLength = true;
+			foundLength = true;
    
-   }
+		}
    
-   length++;   
+		length++;   
    
- }
+	}
  
- fullLength = length + MSG_HEADER_SIZE + 1;  // Add MSG_HEADER_SIZE to our required size and +1 for the final checksum
+	fullLength = length + MSG_HEADER_SIZE + 1;  // Add MSG_HEADER_SIZE to our required size and +1 for the final checksum
  
- unsigned char *outputMsg;
- 
- if((outputMsg = (unsigned char*)calloc(fullLength, sizeof(char))) != NULL) {  // Attempt to allocate memory for outputMsg
-
-   outputMsg[0] = MSG_BEGIN; // Message construction 
-   outputMsg[1] = MSG_TYPE_DBG; // Specify message type
-   outputMsg[2] = fullLength;  // Message size
-   outputMsg[3] = generateChecksum(outputMsg, MSG_HEADER_SIZE - 1);  // Header checksum
-   for(x = 0 ; x < length ; x++) {
+	msg->messageBuffer[0] = MSG_BEGIN;                                                         // Message construction 
+	msg->messageBuffer[1] = msgType;                                                           // Specify the message type
+	msg->messageBuffer[3] = fullLength;                                                        // Message size
+	msg->messageBuffer[4] = generateChecksum(msg->messageBuffer, MSG_HEADER_SIZE - 1);         // Header checksum
+	msg->messageBuffer[fullLength - 1] = generateChecksum(msg->messageBuffer, fullLength - 1); // Fill in our checksum for the whole message
+   
+	Serial.write(msg->messageBuffer, fullLength);  // Write out the message
      
-     outputMsg[x + MSG_HEADER_SIZE] = (unsigned char)message[x]; // Get the rest of the message
+}
+
+/* Write a message back to the PPZ port */
+
+void writePPZMessage(messageState *msg) {
+   
+	int x;
+	
+	msg->messageBuffer[msg->length - 1] = '\0'; // End-of-string for last character replaces checksum
+
+	for(x = 0 ; x < msg->length - MSG_HEADER_SIZE; x++) {
+	
+		msg->messageBuffer[x] = msg->messageBuffer[x + MSG_HEADER_SIZE]; // Shift everything MSG_HEADER_SIZE to the left to drop the header
+	
+	}
+
+	Serial.write(msg->messageBuffer, msg->length - MSG_HEADER_SIZE);  // Write out the message, minus the header size
      
-   } 
-   
-   outputMsg[fullLength - 1] = generateChecksum(outputMsg, fullLength - 1); // Fill in our checksum for the whole message
-   
-   Serial.write(outputMsg, fullLength);  // Write out the message
-   
-   free(outputMsg);  // Deallocate memory for outputMsg
-   return true;
-   
- } else {
-   
-   return false;  // Failed to write the message
-   
- }
-  
 }
 
 /* Init our timer */
+
 void initTimer() {
   
-  cli();   
-  DDRD  &= B11011111; // Disable output on OC1A      
-  TIMSK1 = B00000000; // Disable interrupt on compare match
-  TCCR1A = B00000000; // Disable fast PWM
-  TCCR1B = B00000000; // Disable fast PWM, clock, and prescaler
-  sei();
+	cli();   
+	DDRD  &= B11011111; // Disable output on OC1A      
+	TIMSK1 = B00000000; // Disable interrupt on compare match
+	TCCR1A = B00000000; // Disable fast PWM
+	TCCR1B = B00000000; // Disable fast PWM, clock, and prescaler
+	sei();
   
 }
 
@@ -712,12 +736,12 @@ void initTimer() {
 
 ISR(TIMER1_COMPA_vect) {
 
-  OCR1A = pulses[currentPulse];    // Set OCR1A compare register to our next pulse
-  currentPulse++;                  // Increment the pulse counter
-  if(currentPulse >= PPM_PULSES) { // If the pulse counter is too high reset it
+	OCR1A = pulses[currentPulse];    // Set OCR1A compare register to our next pulse
+	currentPulse++;                  // Increment the pulse counter
+	if(currentPulse >= PPM_PULSES) { // If the pulse counter is too high reset it
     
-    currentPulse = 0;
+		currentPulse = 0;
     
-  }
+	}
  
 }
