@@ -59,7 +59,7 @@ Adruino:
 
 #define VERSION_MAJOR 2       // Version information, Major #
 #define VERSION_MINOR 9       // Minor #
-#define VERSION_MOD   3       // Mod #
+#define VERSION_MOD   4       // Mod #
 
 #define MSG_BEGIN     0xFF    // Begin of control message indicator byte
 #define MSG_TYPE_CTRL 0x01    // Control update message type indicator
