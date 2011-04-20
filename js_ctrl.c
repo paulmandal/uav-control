@@ -854,9 +854,9 @@ int checkMessages(int msgPort, messageState *msg) {
 
 /* processMessage(message, length) - Do whatever the message tells us to do */
 
-void processMessage(unsigned char *message, int length) {
+void processMessage(messageState *msg) {
 
-	unsigned char msgType = message[1];
+	unsigned char msgType = msg->messageBuffer[1];
 	int x;
 
 	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
@@ -869,6 +869,16 @@ void processMessage(unsigned char *message, int length) {
 
 	} else if(msgType == MSG_TYPE_CTRL) { // We shouldn't get this from the Arduino
 	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
+	
+		msg->messageBuffer[msg->length - 1] = '\0'; // Replace checksum with null
+		for(x = 0 ; x < msg->length - MSG_HEADER_SIZE ; x++) {
+		
+			msg->messageBuffer[x] = msg->messageBuffer[x + MSG_HEADER_SIZE];  // Shift everything to the left MSG_HEADER_SIZE bytes
+		
+		}
+		
+		writePortMessage(ppzPort, "PPZ", msg->messageBuffer, msg->length);
+	
 	} else if(msgType == MSG_TYPE_CFG) { // This either
 	} else if(msgType == MSG_TYPE_DBG) { // This is a debug message, print it
 	
