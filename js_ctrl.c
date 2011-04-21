@@ -52,7 +52,7 @@ Adruino:
 
 /* Definitions */
 
-#define DEBUG_LEVEL 1	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 0	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Lost signal debug
 			      // Debug level - 2 - Debug joystick position info
 			      // Debug level - 3 - Debug incoming messages
@@ -170,7 +170,7 @@ void translateJStoAF(jsState joystickState);
 void readJoystick(int jsPort, jsState *joystickState, configValues configInfo);
 int initMessage(messageState *message);
 int checkMessages(int msgPort, messageState *msg);
-void processMessage(unsigned char *message, int length);
+void processMessage(messageState *msg);
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 unsigned char generateChecksum(unsigned char *message, int length);
 int testChecksum(unsigned char *message, int length);
@@ -831,7 +831,7 @@ int checkMessages(int msgPort, messageState *msg) {
 
 		if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  If the checksum failed we can assume corruption elsewhere since the header was legit
 
-			processMessage(msg->messageBuffer, msg->length);
+			processMessage(msg);
 
 		} 
 
@@ -877,15 +877,15 @@ void processMessage(messageState *msg) {
 		
 		}
 		
-		writePortMessage(ppzPort, "PPZ", msg->messageBuffer, msg->length);
+		writePortMsg(ppzPort, "PPZ", msg->messageBuffer, msg->length);
 	
 	} else if(msgType == MSG_TYPE_CFG) { // This either
 	} else if(msgType == MSG_TYPE_DBG) { // This is a debug message, print it
 	
 		printf("DEBUG MSG from UAV: ");
-		for(x = MSG_HEADER_SIZE ; x < length - 1 ; x++) {
+		for(x = MSG_HEADER_SIZE ; x < msg->length - 1 ; x++) {
 		
-			printf("%c", message[x]);
+			printf("%c", msg->messageBuffer[x]);
 		
 		}
 		printf("\n");
