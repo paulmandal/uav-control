@@ -52,14 +52,14 @@ Adruino:
 
 /* Definitions */
 
-#define DEBUG_LEVEL 0	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 1	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Lost signal debug
 			      // Debug level - 2 - Debug joystick position info
 			      // Debug level - 3 - Debug incoming messages
 
 #define VERSION_MAJOR 2       // Version information, Major #
 #define VERSION_MINOR 9       // Minor #
-#define VERSION_MOD   4       // Mod #
+#define VERSION_MOD   5       // Mod #
 
 #define MSG_BEGIN     0xFF    // Begin of control message indicator byte
 #define MSG_TYPE_CTRL 0x01    // Control update message type indicator
@@ -175,7 +175,7 @@ void writePortMsg(int outputPort, char *portName, unsigned char *message, int me
 unsigned char generateChecksum(unsigned char *message, int length);
 int testChecksum(unsigned char *message, int length);
 void sendCtrlUpdate (int signum);
-void checkSignal(int commandsPerAck);
+int checkSignal(int commandsPerAck);
 void printState(jsState joystickState);
 int map(int value, int inRangeLow, int inRangeHigh, int outRangeLow, int outRangeHigh);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
@@ -208,7 +208,7 @@ int debugCommandsPerAck = 0;
 
 /* Main function */
 
-int main (int argc, char **argv)
+int main(int argc, char **argv)
 {
 	int jsPort;  // JoystickPort FD
 	jsState joystickState;                // Current joystick state
@@ -246,7 +246,7 @@ int main (int argc, char **argv)
 
 	printf("Ready to read JS & relay for PPZ...\n");
 
-	while (1) {
+	while(1) {
 
 		if(!handShook) {
 
@@ -296,7 +296,11 @@ int main (int argc, char **argv)
 
 		}
 
-		checkSignal(configInfo.commandsPerAck);  // Check if our signal is still good
+		if(!checkSignal(configInfo.commandsPerAck)) {
+		
+			return 0;
+		
+		}//;  // Check if our signal is still good
 	
 	}
 
@@ -1059,7 +1063,7 @@ void sendCtrlUpdate(int signum) {
 
 /* checkSignal() - Check whether the signal is good, if not RUMBLE!! */
 
-void checkSignal(int commandsPerAck) {
+int checkSignal(int commandsPerAck) {
 
 	if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
@@ -1069,11 +1073,16 @@ void checkSignal(int commandsPerAck) {
 		printf("CSLA: %3d\n", commandsSinceLastAck);
 		printf("Total msgs: %lu\n", totalMsgs);
 		#endif
+		return 0;
 
 	}
 
 	if(commandsSinceLastAck > 120) {  // Small rumble
 	} else if(commandsSinceLastAck > 500) {  // 10s!  Big rumble!
+	} else {
+	
+		return 1;
+	
 	}
 
 }
