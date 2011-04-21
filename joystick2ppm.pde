@@ -45,8 +45,7 @@
 #define MSG_BUFFER_SIZE 256 		      // Message buffer size in bytes
 #define MSG_HEADER_SIZE 4     		      // Message header size in bytes
 #define CMDS_PER_ACK  50                      // Client will assume lost signal if we send this many commands without an ack
-#define MSG_INTERVAL  20                      // Control message update interval (20ms)
-#define LOST_MSG_THRESHOLD (MSG_INTERVAL * 3) // How long without legit msg before lostSignal gets set
+#define LOST_MSG_THRESHOLD 60UL               // How long without legit msg before lostSignal gets set
 
 #define SERVO_COUNT 8       // # of servos
 #define BUTTON_COUNT 12     // # of buttons on controller
@@ -65,13 +64,16 @@
 #define NAVLIGHT_PIN 18                 // Navigation light pin
 #define NAVLIGHT_INTERVAL 1000          // Toggle every 1s
 
+#define ACK_MIN_SIZE 10
+#define ACK_MAX_SIZE 30
+
 /* Various varibles to hold state info */
 
 unsigned int servos[SERVO_COUNT];        // store servo states
 unsigned int buttons[BUTTON_COUNT];      // store button states
 
-boolean lostSignal = true;      // lostSignal state
-unsigned long lastMsgTime = 0;  // Time of last legit message
+boolean lostSignal = true;        // lostSignal state
+unsigned long lastMsgTime = -1UL * LOST_MSG_THRESHOLD; // Time of last legit message, -100 initially so the PPM won't turn on until we get a real message
 
 unsigned int navlightInterval = NAVLIGHT_INTERVAL; // Interval for navigation lights
 unsigned long navlightLastTime = 0;      // Navigation light last 
@@ -82,9 +84,9 @@ unsigned long lastStatusLEDTime = 0;     // Time of last status LED change
 unsigned int statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Current status LED toggle interval
 boolean statusLEDState = false;          // Status LED state
 
-volatile byte currentPulse = 0;        // The pulse being sent
-volatile boolean ppmON = false;
-volatile int pulses[PPM_PULSES];        // PPM pulses
+byte currentPulse = 0;        // The pulse being sent
+boolean ppmON = false;
+int pulses[PPM_PULSES];        // PPM pulses
 
 messageState xbeeMsg;  // Message struct for messages from XBee line
 messageState ppzMsg;  // Message struct for messages from PPZ line
@@ -92,7 +94,8 @@ messageState ppzMsg;  // Message struct for messages from PPZ line
 messageState dbgMsg;  // Message struct for outgoing debug messages
 #endif
 
-volatile int commandsSinceLastAck = 0;
+int commandsSinceLastAck = 0;
+unsigned char ackMsg[ACK_MAX_SIZE];
 
 /* Arduino is racist against function prototypes 
 
@@ -116,8 +119,6 @@ void handleControlUpdate();*/
 
 void setup() {
 
-	delay(100);                         // Wait 100ms since some of our timers use millis() and it starts at 0.  They expect more from it.  They're disappoint.
-                                      // This also gives PuTTY (using for diag on 2nd UART) time to open and connect
 	randomSeed(analogRead(0));          // Seed our random number gen with an unconnected pins static
 	initControlState();                 // Initialise control state
 	initOutputs();                      // Initialise outputs
@@ -133,8 +134,8 @@ void setup() {
   
 	#if DEBUG_LEVEL > 0
 	initMessage(&dbgMsg);      // Init our debug message
-	snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----joystick2ppm version %d.%d.%d... Open for debugging mode...-", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Write a debug message leading and trailing dashes will be replaced with header and checksums
-	writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);  // Send debug message
+	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----joystick2ppm version %d.%d.%d... Open for debugging mode...-", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Write a debug message leading and trailing dashes will be replaced with header and checksums
+	writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);  // Send debug message
 	#endif
   
 	#if DEBUG_LEVEL == 3 || DEBUG_LEVEL == 4
@@ -154,7 +155,7 @@ void loop() {
 	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessage functions should be run with a much higher frequency than the LED updates or checkSignal()
   
 		checkXBeeMessages(&xbeeMsg);        // Check for incoming XBee messages
-		checkPPZMessages(&ppzMsg):		// Check for incoming PPZ messages
+		checkPPZMessages(&ppzMsg);		// Check for incoming PPZ messages
 
 	}
 
@@ -204,8 +205,8 @@ void initPPM() {
 	#if DEBUG_LEVEL == 5
 	for(x = 0 ; x < PPM_PULSES ; x++) {
    
-		snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d -", x, pulses[x]); // Build debug message
-		writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
+		dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d -", x, pulses[x]); // Build debug message
+		writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
     
 	}
 	#endif
@@ -226,10 +227,16 @@ void initOutputs() {
 
 boolean initMessage(messageState *msg) {
 
+        int x;
 	msg->readBytes = 0;
 	msg->length = MSG_HEADER_SIZE; // Init message.length as header length size
 	if((msg->messageBuffer = (unsigned char*)calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
 	
+                for(x = 0 ; x < MSG_HEADER_SIZE ; x++) {
+                  
+                  msg->messageBuffer[x] = '\0';
+                  
+                }
 		return true; // calloc() worked
 	
 	} else {
@@ -277,8 +284,8 @@ boolean checkXBeeMessages(messageState *msg) {
 			testByte = Serial.read();  // Read our byte		
 
 			#if DEBUG_LEVEL == 1
-			snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----BYTE[%d/%d - CSLA: %d]: %x-", msg->readBytes, msg->length, commandsSinceLastAck, testByte); // Build debug message
-			writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
+			dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----BYTE[%d/%d - CSLA: %d]: %x-", msg->readBytes, msg->length, commandsSinceLastAck, testByte); // Build debug message
+			writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
 			#endif		
 
 			msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
@@ -296,7 +303,7 @@ boolean checkXBeeMessages(messageState *msg) {
 
 		if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  If the checksum failed we can assume corruption elsewhere since the header was legit
 
-			processMessage(msg->messageBuffer, msg->length);
+			processMessage(msg);
 
 		} 
 
@@ -328,7 +335,7 @@ boolean checkPPZMessages(messageState *msg) {
 		testByte = Serial1.read();  // Read our byte		
 
 		#if DEBUG_LEVEL == 1
-		snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----PPZBYTE[%d - CSLA: %d]: %x-", dbgMsg.readBytes, commandsSinceLastAck, testByte);
+		dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----PPZBYTE[%d - CSLA: %d]: %x-", dbgMsg.readBytes, commandsSinceLastAck, testByte);
 		writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);
 		#endif		
 
@@ -368,8 +375,8 @@ void processMessage(messageState *msg) {
 	unsigned char msgType = msg->messageBuffer[1];
 
 	#if DEBUG_LEVEL == 1
-	snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CSLA: %d-", commandsSinceLastAck); // Build debug message
-	writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                                // Write debug message
+	dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CSLA: %d-", commandsSinceLastAck); // Build debug message
+	writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                                // Write debug message
 	#endif
 
         commandsSinceLastAck++;
@@ -449,22 +456,22 @@ int testChecksum(unsigned char *message, int length) {
 	int x;
 
 	#if DEBUG_LEVEL == 1
-	snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHKMSG:-"); // Build debug message
-	writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
+	dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHKMSG:-"); // Build debug message
+	writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
 	#endif
 
 	for(x = 0 ; x < length ; x++) {
 
 		#if DEBUG_LEVEL == 1
-		snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----%x-", (unsigned int)message[x]); // Build debug message
-		writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
+		dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----%x-", (unsigned int)message[x]); // Build debug message
+		writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
 		#endif
                 checksum = checksum ^ (unsigned int)message[x];  // Test this message against its checksum (last byte)
 
 	}
 	#if DEBUG_LEVEL == 1
-	snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHK: %x CSLA: %d-", checksum, commandsSinceLastAck); // Build debug message
-	writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
+	dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHK: %x CSLA: %d-", checksum, commandsSinceLastAck); // Build debug message
+	writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
 	#endif
 
 	if(checksum == 0x00) {
@@ -483,34 +490,29 @@ int testChecksum(unsigned char *message, int length) {
 
 void sendAck() {
 
-	unsigned char *msgSync;
         unsigned int checksum;
 	int x, msgSize;
 
-        msgSize = random(10, 30); // Sync message is between 10 and 30 chars
-        
-        msgSync = (unsigned char*)calloc(msgSize, sizeof(char)); // Allocate memory for sync msg
+        msgSize = random(ACK_MIN_SIZE, ACK_MAX_SIZE); // Sync message is between ACK_MIN_SIZE and ACK_MAX_SIZE chars
         
         #if DEBUG_LEVEL == 1
-      	snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Sending SYNC ACK:-"); // Build debug message
-	writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                   // Write debug message
+      	dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Sending SYNC ACK:-"); // Build debug message
+	writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                   // Write debug message
 	#endif 
 
-	msgSync[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
-	msgSync[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
-        msgSync[2] = msgSize; // Message length
-        msgSync[3] = generateChecksum(msgSync, MSG_HEADER_SIZE - 1); // Header checksum
+	ackMsg[0] = MSG_BEGIN;  // Use our msg buffer to write back a sync reply
+	ackMsg[1] = MSG_TYPE_SYNC;  // Sync reply will have same format (msgBegin, msgType, random chars, checksum)
+        ackMsg[2] = msgSize; // Message length
+        ackMsg[3] = generateChecksum(ackMsg, MSG_HEADER_SIZE - 1); // Header checksum
         for(x = 4 ; x < msgSize ; x++) { 
 
-		msgSync[x] = (unsigned char)random(0, 254); // Fill all but the last character with random bytes
+		ackMsg[x] = (unsigned char)random(0, 254); // Fill all but the last character with random bytes
 
 	}
-        msgSync[msgSize - 1] = generateChecksum(msgSync, msgSize - 1); // Store our message checksum
-	Serial.write(msgSync, msgSize);     // Send the sync ACK
+        ackMsg[msgSize - 1] = generateChecksum(ackMsg, msgSize - 1); // Store our message checksum
+	Serial.write(ackMsg, msgSize);     // Send the sync ACK
         Serial.flush();                          // Flush the serial buffer since it may be full of garbage
         commandsSinceLastAck = 0;               // Set commandsSinceLastAck to 0
-        
-        free(msgSync); // Deallocate memory for sync msg
 
 }
 
@@ -572,12 +574,12 @@ void checkSignal() {
 			TCCR1C = B10000000;                              // Force match, this will force the pin low
 			DDRD  &= B11011111;                              // Disable output on OC1A      
 			#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
-			snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "Restarting PPM, lostSignal = false"); // Build debug message
-			writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
+			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Stopping PPM, lostSignal = true-"); // Build debug message
+			writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
 			#endif
 			#if DEBUG_LEVEL == 4
-			snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "commandsSinceLastAck: %d currentTime: %ul lastMsgTime: %ul diff: %ul > %d", commandsSinceLastAck, currentTime, lastMsgTime, currentTime - lastMsgTime, LOST_MSG_THRESHOLD); // Build debug message
-			writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
+			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----commandsSinceLastAck: %d currentTime: %lu lastMsgTime: %lu diff: %lu > %lu-", commandsSinceLastAck, currentTime, lastMsgTime, (currentTime - lastMsgTime), LOST_MSG_THRESHOLD); // Build debug message
+			writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
 			#endif
 			statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
 			#if DEBUG_LEVEL == 3 || DEBUG_LEVEL == 4
@@ -597,8 +599,8 @@ void checkSignal() {
 			statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
 
 			#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
-			snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "Restarting PPM, lostSignal = false"); // Build debug message
-			writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
+			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Starting PPM, lostSignal = false-"); // Build debug message
+			writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
 			#endif        
         
 			TCCR1B = B00001000;                     // CTC mode, clock disabled, OCR1A will never be reached by TCNT1 'coz no clock is running
@@ -660,8 +662,8 @@ void handleControlUpdate() {
 	#if DEBUG_LEVEL == 5
 	for(x = 0 ; x < PPM_PULSES ; x++) {
 
-		snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d-", x, pulses[x]); // Build debug message
-		writeXbeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
+		dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d-", x, pulses[x]); // Build debug message
+		writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
     
 	}
 	#endif
@@ -671,33 +673,14 @@ void handleControlUpdate() {
 /* Write a message back to the XBee port */
 
 void writeXBeeMessage(messageState *msg, unsigned char msgType) {
-   
-	int length = 0;
-	int x;
-	int fullLength = 0;
-	boolean foundLength = false;
-
-	while(length < MSG_BUFFER_SIZE && !foundLength) {
-   
-		if(msg->messageBuffer[length] == '\0') { // Found end of message;
-   
-			foundLength = true;
-   
-		}
-   
-		length++;   
-   
-	}
- 
-	fullLength = length + MSG_HEADER_SIZE + 1;  // Add MSG_HEADER_SIZE to our required size and +1 for the final checksum
  
 	msg->messageBuffer[0] = MSG_BEGIN;                                                         // Message construction 
 	msg->messageBuffer[1] = msgType;                                                           // Specify the message type
-	msg->messageBuffer[3] = fullLength;                                                        // Message size
-	msg->messageBuffer[4] = generateChecksum(msg->messageBuffer, MSG_HEADER_SIZE - 1);         // Header checksum
-	msg->messageBuffer[fullLength - 1] = generateChecksum(msg->messageBuffer, fullLength - 1); // Fill in our checksum for the whole message
+	msg->messageBuffer[2] = msg->length;                                                       // Message size
+	msg->messageBuffer[3] = generateChecksum(msg->messageBuffer, MSG_HEADER_SIZE - 1);         // Header checksum
+	msg->messageBuffer[msg->length - 1] = generateChecksum(msg->messageBuffer, msg->length - 1); // Fill in our checksum for the whole message
    
-	Serial.write(msg->messageBuffer, fullLength);  // Write out the message
+	Serial.write(msg->messageBuffer, msg->length);  // Write out the message
      
 }
 
