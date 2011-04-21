@@ -296,11 +296,7 @@ int main(int argc, char **argv)
 
 		}
 
-		if(!checkSignal(configInfo.commandsPerAck)) {
-		
-			return 0;
-		
-		}//;  // Check if our signal is still good
+		checkSignal(configInfo.commandsPerAck);  // Check if our signal is still good
 	
 	}
 
