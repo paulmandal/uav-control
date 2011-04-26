@@ -56,6 +56,7 @@ Adruino:
 			      // Debug level - 1 - Lost signal debug
 			      // Debug level - 2 - Debug joystick position info
 			      // Debug level - 3 - Debug incoming messages
+			      // Debug level - 4 - Time incoming messages
 
 #define VERSION_MAJOR 2       // Version information, Major #
 #define VERSION_MINOR 9       // Minor #
@@ -197,8 +198,8 @@ afState airframeState; // Current airframe state
 int ppzPort;           // PPZ port FD
 int xbeePort;          // XBee port FD
 
-volatile int commandsSinceLastAck = 0;  // Commands sent since last ACK
-volatile int handShook = 0;             // Handshook?
+int commandsSinceLastAck = 0;  // Commands sent since last ACK
+int handShook = 0;             // Handshook?
 
 unsigned long totalMsgs = 0;
 
@@ -206,10 +207,14 @@ unsigned long totalMsgs = 0;
 int debugCommandsPerAck = 0;
 #endif
 
+time_t startTime;
+
 /* Main function */
 
 int main(int argc, char **argv)
 {
+
+	startTime = time(NULL);
 	int jsPort;  // JoystickPort FD
 	jsState joystickState;                // Current joystick state
 	configValues configInfo;   	      // Configuration values
@@ -250,7 +255,9 @@ int main(int argc, char **argv)
 
 		if(!handShook) {
 
+			#if DEBUG_LEVEL != 4
 			printf("Handshaking..");
+			#endif
 			#if DEBUG_LEVEL == 1	
 			printf("\n");
 			#endif
@@ -269,7 +276,9 @@ int main(int argc, char **argv)
 
 			}
 
-			printf("got ACK, handshake complete!\n");
+			#if DEBUG_LEVEL != 4
+			printf("got ACK, handshake complete!\n\n");
+			#endif
 	
 		}
 
@@ -877,13 +886,23 @@ void processMessage(messageState *msg) {
 		
 		}
 		
-		writePortMsg(ppzPort, "PPZ", msg->messageBuffer, msg->length);
+		//writePortMsg(ppzPort, "PPZ", msg->messageBuffer, msg->length);
+		printf("PPZ Msg: %s\n", msg->messageBuffer);
 	
 	} else if(msgType == MSG_TYPE_CFG) { // This either
 	} else if(msgType == MSG_TYPE_DBG) { // This is a debug message, print it
 	
+		#if DEBUG_LEVEL == 4
+		time_t currentTime = time(NULL);
+		time_t diff = currentTime - startTime;
+		printf("DEBUG MSG from UAV [%lds since last]: ", diff);
+		startTime = currentTime;
+		#else
 		printf("DEBUG MSG from UAV: ");
+		#endif
+
 		for(x = MSG_HEADER_SIZE ; x < msg->length - 1 ; x++) {
+		
 		
 			printf("%c", msg->messageBuffer[x]);
 		
@@ -1063,18 +1082,28 @@ int checkSignal(int commandsPerAck) {
 
 	if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
+
 		handShook = 0;  // Turn off handshake so we can resync
+		#if DEBUG_LEVEL != 4
 		printf("Lost signal!  Attempting to resync.\n");
+		#endif
 		#if DEBUG_LEVEL == 1
-		printf("CSLA: %3d\n", commandsSinceLastAck);
-		printf("Total msgs: %lu\n", totalMsgs);
+		time_t currentTime = time(NULL);
+		time_t diff = currentTime - startTime;
+		printf("CSLA: %3d Total msgs: %lu Running: %lds\n", commandsSinceLastAck, totalMsgs, diff);
 		#endif
 		return 0;
 
 	}
 
-	if(commandsSinceLastAck > 120) {  // Small rumble
+	if(commandsSinceLastAck > 120 && commandsSinceLastAck < 501) {  // Small rumble
+	
+		return 0;
+	
 	} else if(commandsSinceLastAck > 500) {  // 10s!  Big rumble!
+	
+		return 0;
+	
 	} else {
 	
 		return 1;
