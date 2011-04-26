@@ -13,17 +13,13 @@
 TODO:
 
 - DPad -> servo control
-- Relay PPZ -> UAV
-- Relay UAV -> PPZ
 - Force feedback on RSSI weak/loss
 
 Adruino:
 
 - Handle config updates via msg
-- Improve message handling, PPZ and JS
 - Handle digital pins/buttons
 - Handle 3-way switch (or servo it?)
-- Relay PPZ<->GCS
 
 */
 
@@ -171,7 +167,7 @@ void initAirframe();
 void translateJStoAF(jsState joystickState);
 void readJoystick(int jsPort, jsState *joystickState, configValues configInfo);
 int initMessage(messageState *message);
-int checkMessages(int msgPort, messageState *msg);
+int checkXBeeMessages(int msgPort, messageState *msg);
 void processMessage(messageState *msg);
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 unsigned char generateChecksum(unsigned char *message, int length);
@@ -216,13 +212,15 @@ int main(int argc, char **argv)
 {
 
 	startTime = time(NULL);
-	int jsPort;  // JoystickPort FD
-	jsState joystickState;                // Current joystick state
-	configValues configInfo;   	      // Configuration values
-	messageState xbeeMsg;		      // messageState for incoming XBee message
-	char *ppzSlavePort;
+	int jsPort;              // JoystickPort FD
+	jsState joystickState;   // Current joystick state
+	configValues configInfo; // Configuration values
+	messageState xbeeMsg;	 // messageState for incoming XBee message
+	messageState ppzMsg;	 // messageState for incoming PPZ message
+	char *ppzSlavePort;      // Name of pty slave device file
 
 	initMessage(&xbeeMsg);
+	initMessage(&ppzMsg);
 	
 	printf("Starting js_crl version %d.%d.%d-%s...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);  // Print version information
 
@@ -237,16 +235,13 @@ int main(int argc, char **argv)
 	initAirframe();  // Init airframe state
 
 	if((xbeePort = openPort(configInfo.xbeePortFile, "XBee")) < 0) { // open the XBee port
-
 		return 1;
 	}
 
 	if((openPty(&ppzPort, &ppzSlavePort)) == 1) { // open the PPZ pty
 		return 1;
 	} else {
-
-		printf("PPZ pty: %s", ppzSlavePort);
-
+		printf("PPZ pty file is: %s\n", ppzSlavePort);
 	}
 
 	if((jsPort = openJoystick(configInfo.joystickPortFile, &joystickState)) < 0) { // open the Joystick
@@ -270,7 +265,7 @@ int main(int argc, char **argv)
 
 			while(!handShook) {  // Handshaking loop
 
-				if(!checkMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
+				if(!checkXBeeMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
 
 					usleep(100); // If nothing is there pause for 100usec, handshake is sent out by interrupt at 50Hz
 
@@ -299,15 +294,9 @@ int main(int argc, char **argv)
 		int x;
 		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {  // Try to read MSG_BUFFER_SIZE bytes per loop
 
-			if(!checkMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
-
-				usleep(10); // If there was nothing pending pause for 100usec, max pause per loop is 1,000usec = 1ms
-			
-			} else {
-						
-				usleep(10); // Give 10usec for character to be removed from buffer by read()
-				
-			}  
+			checkXBeeMessages(xbeePort, &xbeeMsg); // Check for pending msg bytes
+			//checkPPZMessages(ppzPort, ppzMsg); // Check for pending msg bytes
+			usleep(10); // Pause for 10usec
 
 		}
 
@@ -801,9 +790,9 @@ int initMessage(messageState *message) {
 	
 }
 
-/* checkMessages() - Check for and handle any incoming messages */
+/* checkXBeeMessages() - Check for and handle any incoming messages */
 
-int checkMessages(int msgPort, messageState *msg) {
+int checkXBeeMessages(int msgPort, messageState *msg) {
 
 	unsigned char testByte = 0x00;
 	int msgGood = 0;
@@ -845,7 +834,7 @@ int checkMessages(int msgPort, messageState *msg) {
 
 	if(msg->readBytes < msg->length) { // Message is not finished being read
 
-		if(read(xbeePort, &testByte, sizeof(char)) == sizeof(char)) {  // We read a byte, so process it
+		if(read(msgPort, &testByte, sizeof(char)) == sizeof(char)) {  // We read a byte, so process it
 
 			#if DEBUG_LEVEL == 3
 			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x\n", msg->readBytes, msg->length, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
