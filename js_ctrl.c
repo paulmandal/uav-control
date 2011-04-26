@@ -61,6 +61,7 @@ Adruino:
 #define VERSION_MAJOR 2       // Version information, Major #
 #define VERSION_MINOR 9       // Minor #
 #define VERSION_MOD   5       // Mod #
+#define VERSION_TAG   "DBG"   // Tag
 
 #define MSG_BEGIN     0xFF    // Begin of control message indicator byte
 #define MSG_TYPE_CTRL 0x01    // Control update message type indicator
@@ -219,10 +220,11 @@ int main(int argc, char **argv)
 	jsState joystickState;                // Current joystick state
 	configValues configInfo;   	      // Configuration values
 	messageState xbeeMsg;		      // messageState for incoming XBee message
+	char *ppzSlavePort;
 
 	initMessage(&xbeeMsg);
 	
-	printf("Starting js_crl version %d.%d.%d...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Print version information
+	printf("Starting js_crl version %d.%d.%d-%s...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);  // Print version information
 
 	srand(time(NULL));  // Init random using current time
 	if(readConfig(&configInfo) < 0) { // Read our config into our config vars
@@ -239,9 +241,13 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	/*if((ppzPort = openPort(ppzPortFile, "PPZ")) < 0) { // open the PPZ port
+	if((openPty(&ppzPort, &ppzSlavePort)) == 1) { // open the PPZ pty
 		return 1;
-	}*/
+	} else {
+
+		printf("PPZ pty: %s", ppzSlavePort);
+
+	}
 
 	if((jsPort = openJoystick(configInfo.joystickPortFile, &joystickState)) < 0) { // open the Joystick
 		return 1;
@@ -337,6 +343,26 @@ int openPort(char *portName, char *use) {
 	tcsetattr(fd, TCSANOW, &options);     // Set options
 
 	return fd; // Return the file descriptor for our port
+
+}
+
+int openPty(int *master, char *slaveDevice) {
+
+	if((master = posix_openpt(O_RDWR | O_NOCTTY)) < 0) {
+	
+		perror("js_ctrl");
+		return -1;
+	
+	}
+	
+	if((grantpt(master) == -1) || (unlockpt(master) == -1) || ((slaveDevice = ptsname(master)) == NULL)) {
+	
+		perror("js_ctrl");
+		return -1;
+	
+	}
+	
+	return 1;
 
 }
 

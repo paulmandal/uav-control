@@ -1,7 +1,5 @@
 [XBee Port File]
 /dev/ttyUSB0
-[PPZ Port File]
-/dev/ttyUSB1
 [Joystick Port File]
 /dev/input/js0
 [Joystick Event File]
