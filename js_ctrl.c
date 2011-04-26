@@ -34,7 +34,6 @@ Adruino:
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-#include <stdlib.h>
 #include <stdint.h>
 #include <termios.h>
 #include <time.h>
@@ -160,6 +159,7 @@ typedef struct _messageState {
 /* Let's do sum prototypes! */
 
 int openPort(char *portName, char *use);
+int openPty(int *master, char *slaveDevice);
 int openJoystick(char *portName, jsState *joystickState);
 int readConfig(configValues *configInfo);
 void initTimer(configValues configInfo);
@@ -212,12 +212,12 @@ int main(int argc, char **argv)
 {
 
 	startTime = time(NULL);
-	int jsPort;              // JoystickPort FD
-	jsState joystickState;   // Current joystick state
-	configValues configInfo; // Configuration values
-	messageState xbeeMsg;	 // messageState for incoming XBee message
-	messageState ppzMsg;	 // messageState for incoming PPZ message
-	char *ppzSlavePort;      // Name of pty slave device file
+	int jsPort;                // JoystickPort FD
+	jsState joystickState;     // Current joystick state
+	configValues configInfo;   // Configuration values
+	messageState xbeeMsg;	   // messageState for incoming XBee message
+	messageState ppzMsg;	   // messageState for incoming PPZ message
+	char *ppzSlavePort = NULL; // Name of pty slave device file
 
 	initMessage(&xbeeMsg);
 	initMessage(&ppzMsg);
@@ -238,7 +238,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if((openPty(&ppzPort, &ppzSlavePort)) == 1) { // open the PPZ pty
+	if((openPty(&ppzPort, ppzSlavePort)) == 1) { // open the PPZ pty
 		return 1;
 	} else {
 		printf("PPZ pty file is: %s\n", ppzSlavePort);
@@ -337,14 +337,14 @@ int openPort(char *portName, char *use) {
 
 int openPty(int *master, char *slaveDevice) {
 
-	if((master = posix_openpt(O_RDWR | O_NOCTTY)) < 0) {
+	if((*master = posix_openpt(O_RDWR | O_NOCTTY)) < 0) {
 	
 		perror("js_ctrl");
 		return -1;
 	
 	}
 	
-	if((grantpt(master) == -1) || (unlockpt(master) == -1) || ((slaveDevice = ptsname(master)) == NULL)) {
+	if((grantpt(*master) == -1) || (unlockpt(*master) == -1) || ((*slaveDevice = ptsname(*master)) == NULL)) {
 	
 		perror("js_ctrl");
 		return -1;
