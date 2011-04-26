@@ -159,7 +159,7 @@ typedef struct _messageState {
 /* Let's do sum prototypes! */
 
 int openPort(char *portName, char *use);
-int openPty(int *master, char *slaveDevice);
+char *openPty(int *master, char *use);
 int openJoystick(char *portName, jsState *joystickState);
 int readConfig(configValues *configInfo);
 void initTimer(configValues configInfo);
@@ -238,10 +238,14 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if((openPty(&ppzPort, ppzSlavePort)) == 1) { // open the PPZ pty
-		return 1;
-	} else {
+	if((ppzSlavePort = openPty(&ppzPort, "PPZ")) != NULL) { // open the PPZ pty
+	
 		printf("PPZ pty file is: %s\n", ppzSlavePort);
+		
+	} else {
+	
+		return 1;
+		
 	}
 
 	if((jsPort = openJoystick(configInfo.joystickPortFile, &joystickState)) < 0) { // open the Joystick
@@ -295,7 +299,7 @@ int main(int argc, char **argv)
 		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {  // Try to read MSG_BUFFER_SIZE bytes per loop
 
 			checkXBeeMessages(xbeePort, &xbeeMsg); // Check for pending msg bytes
-			//checkPPZMessages(ppzPort, ppzMsg); // Check for pending msg bytes
+			//checkPPZMessages(ppzPort, &ppzMsg); // Check for pending msg bytes
 			usleep(10); // Pause for 10usec
 
 		}
@@ -335,23 +339,26 @@ int openPort(char *portName, char *use) {
 
 }
 
-int openPty(int *master, char *slaveDevice) {
+/* openPty() - Open a pty for communication with the PPZ GCS software */
 
-	if((*master = posix_openpt(O_RDWR | O_NOCTTY)) < 0) {
+char *openPty(int *master, char *use) {
+
+	char *slaveDevice;
+	if((*master = posix_openpt(O_RDWR | O_NOCTTY)) < 0) {  // Create our pty with posix_openpt()
 	
 		perror("js_ctrl");
-		return -1;
+		return NULL;
 	
 	}
 	
-	if((grantpt(*master) == -1) || (unlockpt(*master) == -1) || ((*slaveDevice = ptsname(*master)) == NULL)) {
+	if((grantpt(*master) == -1) || (unlockpt(*master) == -1) || ((slaveDevice = ptsname(*master)) == NULL)) { // Grant permissions and unlock our pty, then return the device name for display to the user
 	
 		perror("js_ctrl");
-		return -1;
+		return NULL;
 	
 	}
 	
-	return 1;
+	return slaveDevice;
 
 }
 
@@ -560,7 +567,7 @@ int readConfig(configValues *configInfo) {
 		printf("%2d: %2d		", x + 1, configInfo->buttonStateCount[x]);
 	
 	}
-	printf("\n");
+	printf("\n\n");
 
 	if(readCount >= CONFIG_FILE_MIN_COUNT) {
 
@@ -901,7 +908,7 @@ void processMessage(messageState *msg) {
 		
 		}
 		
-		//writePortMsg(ppzPort, "PPZ", msg->messageBuffer, msg->length);
+		writePortMsg(ppzPort, "PPZ", msg->messageBuffer, msg->length);
 		printf("PPZ Msg: %s\n", msg->messageBuffer);
 	
 	} else if(msgType == MSG_TYPE_CFG) { // This either
@@ -1031,33 +1038,33 @@ void sendCtrlUpdate(int signum) {
 
 		int msgSize = MSG_HEADER_SIZE + SERVO_COUNT + 3 + 1; // MSG_HEADER_SIZE + 1 byte per servo + 3 bytes buttons + 1 checksum byte
 		int buttonOffset = MSG_HEADER_SIZE + SERVO_COUNT;
-		unsigned char *xbeeMsg;
+		unsigned char *ctrlMsg;
 
-		xbeeMsg = calloc(msgSize, sizeof(char)); // Allocate memory for our message
+		ctrlMsg = calloc(msgSize, sizeof(char)); // Allocate memory for our message
 
-		xbeeMsg[0] = MSG_BEGIN;      // First character of xbeeMsg is MSG_BEGIN
-		xbeeMsg[1] = MSG_TYPE_CTRL;  // Message type = control
-		xbeeMsg[2] = msgSize;  // Message length = MSG_SIZE_CTRL
-		xbeeMsg[3] = generateChecksum(xbeeMsg, MSG_HEADER_SIZE - 1); // Generate and store checksum
+		ctrlMsg[0] = MSG_BEGIN;      // First character of ctrlMsg is MSG_BEGIN
+		ctrlMsg[1] = MSG_TYPE_CTRL;  // Message type = control
+		ctrlMsg[2] = msgSize;  // Message length = MSG_SIZE_CTRL
+		ctrlMsg[3] = generateChecksum(ctrlMsg, MSG_HEADER_SIZE - 1); // Generate and store checksum
 		for(x = 0 ; x < SERVO_COUNT ; x++) {
 
-			xbeeMsg[x + MSG_HEADER_SIZE] = (unsigned char)airframeState.servos[x];  // Next 8 bytes are servo states
+			ctrlMsg[x + MSG_HEADER_SIZE] = (unsigned char)airframeState.servos[x];  // Next 8 bytes are servo states
 
 		}
 
 		for(x = 0 ; x < 3 ; x++) {  // Next 3 bytes are 12 buttons, 2 bits per button
 
-			xbeeMsg[x + buttonOffset] = (airframeState.buttons[(x * 4)] & 3) << 6;                       // Mask away anything but the last 2 bits and then bitshift to the left
-			xbeeMsg[x + buttonOffset] = xbeeMsg[x + buttonOffset] | (airframeState.buttons[(x * 4) + 1] & 3) << 4;  // Mask away same, bitshift 4 to the left and bitwise OR to add this to our byte
-			xbeeMsg[x + buttonOffset] = xbeeMsg[x + buttonOffset] | (airframeState.buttons[(x * 4) + 2] & 3) << 2;  // Same
-			xbeeMsg[x + buttonOffset] = xbeeMsg[x + buttonOffset] | (airframeState.buttons[(x * 4) + 3] & 3);       // Same, no bitshift since we're already on the last two bits
+			ctrlMsg[x + buttonOffset] = (airframeState.buttons[(x * 4)] & 3) << 6;                       // Mask away anything but the last 2 bits and then bitshift to the left
+			ctrlMsg[x + buttonOffset] = ctrlMsg[x + buttonOffset] | (airframeState.buttons[(x * 4) + 1] & 3) << 4;  // Mask away same, bitshift 4 to the left and bitwise OR to add this to our byte
+			ctrlMsg[x + buttonOffset] = ctrlMsg[x + buttonOffset] | (airframeState.buttons[(x * 4) + 2] & 3) << 2;  // Same
+			ctrlMsg[x + buttonOffset] = ctrlMsg[x + buttonOffset] | (airframeState.buttons[(x * 4) + 3] & 3);       // Same, no bitshift since we're already on the last two bits
 
 		}
 
-		xbeeMsg[msgSize - 1] = generateChecksum(xbeeMsg, msgSize - 1); // Store our checksum as our last byte
+		ctrlMsg[msgSize - 1] = generateChecksum(ctrlMsg, msgSize - 1); // Store our checksum as our last byte
 
-		writePortMsg(xbeePort, "XBee", xbeeMsg, msgSize); // Write out message to XBee
-		free(xbeeMsg); // Deallocate memory for xbeeMsg
+		writePortMsg(xbeePort, "XBee", ctrlMsg, msgSize); // Write out message to XBee
+		free(ctrlMsg); // Deallocate memory for ctrlMsg
 		totalMsgs++;
 		commandsSinceLastAck++;
 	
