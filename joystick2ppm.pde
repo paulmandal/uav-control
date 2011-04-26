@@ -23,12 +23,13 @@
 
 /* This is the defining moment of the file */
 
-#define DEBUG_LEVEL 4   // 1 - Messaging debugging
+#define DEBUG_LEVEL 7   // 1 - Messaging debugging
                         // 2 - Servo / pin output
                         // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
                         // 4 - Signal continuity (with serial output)
                         // 5 - PPM registers
                         // 6 - PPM pulse values
+                        // 7 - Only start debug message
 #define DEBUG_PIN1  4   // Pin for debug signaling   
                      
 
@@ -154,8 +155,8 @@ void loop() {
 
 	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessage functions should be run with a much higher frequency than the LED updates or checkSignal()
   
-		checkXBeeMessages(&xbeeMsg);        // Check for incoming XBee messages
-		checkPPZMessages(&ppzMsg);		// Check for incoming PPZ messages
+		checkXBeeMessages(&xbeeMsg); // Check for incoming XBee messages
+		checkPPZMessages(&ppzMsg);   // Check for incoming PPZ messages
 
 	}
 
@@ -341,11 +342,14 @@ boolean checkPPZMessages(messageState *msg) {
 
 		msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
 		msg->readBytes++;			       // Increment readBytes
+                msg->length++;                                 // Increment length
 		
-		if(testByte == '\0') { // This is the message end, relay the message to GCS and reset dbgMsg
+		if(testByte == '\n') { // This is the message end, relay the message to GCS and reset msg
 		
 			writeXBeeMessage(msg, MSG_TYPE_PPZ);
+
 			msg->readBytes = MSG_HEADER_SIZE;  // Leave room for header to be added
+                        msg->length = MSG_HEADER_SIZE;
 			int x;	
 
 			// Clear out message so it's ready to be used again	
@@ -631,7 +635,13 @@ void checkSignal() {
 void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
 
 	int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
-	pulses[(index * 2) + 1] = mappedPulse; // Store new pulse width
+        if(TCNT1 > PPM_HIGH_PULSE) {  // Avoid PPM inversion by skipping this set, this will cause a max delay of 20ms in a servo position setting
+  
+          cli(); // Disable interrupts while this is being set
+          pulses[(index * 2) + 1] = mappedPulse; // Store new pulse width
+          sei(); // Re-enable interrupts
+          
+        }
 
 }
 
