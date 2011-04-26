@@ -221,6 +221,7 @@ int main(int argc, char **argv)
 
 	initMessage(&xbeeMsg);
 	initMessage(&ppzMsg);
+	ppzMsg.readBytes = MSG_HEADER_SIZE; // Leave space for the addition of a header to the msg from GCS
 	
 	printf("Starting js_crl version %d.%d.%d-%s...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);  // Print version information
 
@@ -308,7 +309,8 @@ int main(int argc, char **argv)
 	
 	}
 
-	free(xbeeMsg.messageBuffer);
+	free(xbeeMsg.messageBuffer); // Meh
+	free(ppzMsg.messageBuffer); // Not that this matters..
 	return 0;
 
 }
@@ -879,6 +881,50 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 		
 		return 1;
 
+	}
+
+}
+
+/* checkPPZMessages() - Check for and handle any incoming PPZ messages */
+
+int checkPPZMessages(messageState *msg) {
+
+	unsigned char testByte = 0x00;
+	
+	if(read(msgPort, &testByte, sizeof(char)) == sizeof(char)) {
+
+		msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
+		msg->readBytes++;			       // Increment readBytes
+                msg->length++;                                 // Increment length
+		
+		if(testByte == '\n') { // This is the message end, relay the message to UAV and reset msg
+		
+			msg->messageBuffer[0] = MSG_BEGIN;
+			msg->messageBuffer[1] = MSG_TYPE_PPZ;
+			msg->messageBuffer[2] = msg->length;
+			msg->messageBuffer[3] = generateChecksum(msg->messageBuffer, MSG_HEADER_SIZE);
+			msg->messageBuffer[msg->length - 1] = generateChecksum(msg->messageBuffer, msg->length - 1);
+			writePortMsg(xbeePort, "XBee", msg->messageBuffer, msg->length);
+
+			msg->readBytes = MSG_HEADER_SIZE;  // Leave room for header to be added
+                        msg->length = MSG_HEADER_SIZE;
+			int x;	
+
+			// Clear out message so it's ready to be used again	
+			for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
+
+				msg->messageBuffer[x] = '\0';
+
+			}
+		
+		}
+	
+		return 1;
+	
+	} else {
+
+		return 0;
+	
 	}
 
 }
