@@ -15,6 +15,8 @@
  * Digital I/O: 0, 1, 2, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23
  * USART: 8, 9, 10, 11
  * ADC: 24, 25, 26, 27, 28, 29 (I think?)
+ *
+ * There is an option to use this with an ATmega328P in a more limited capacity (e.g. for testing)
  */
 
 /* Including things */
@@ -23,6 +25,8 @@
 
 /* This is the defining moment of the file */
 
+//#define ATMEGA644P    // Define ATmega644P, otherwise default to ATmega328P code
+
 #define DEBUG_LEVEL 7   // 1 - Messaging debugging
                         // 2 - Servo / pin output
                         // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
@@ -30,8 +34,16 @@
                         // 5 - PPM registers
                         // 6 - PPM pulse values
                         // 7 - Only start debug message
-#define DEBUG_PIN1  4   // Pin for debug signaling   
-                     
+
+#ifdef ATMEGA644P
+#define DEBUG_PIN1     4 // Pin for debug signaling
+#define STATUS_LED_PIN 0 // Status LED pin
+#define NAVLIGHT_PIN  18 // Navigation light pin  
+#else
+#define DEBUG_PIN1     12 // Pin for debug signaling   
+#define STATUS_LED_PIN 13 // Status LED pin
+#define NAVLIGHT_PIN   11 // Navigation light pin  
+#endif
 
 #define VERSION_MAJOR 2     // Major version #
 #define VERSION_MINOR 9     // Minor #
@@ -59,11 +71,9 @@
 #define PPM_PULSES ((SERVO_COUNT * 2) + 2)  // How many pulses are there in the whole PPM (One 220us HIGH per servo, then 1ms-2ms LOW for servo pos, then 220us HIGH for pulse, then PPM_SYNC_PULSE LOW)
 #define PPM_SYNC_PULSE (PPM_FREQUENCY - (SERVO_COUNT * (((PPM_MAX_PULSE + PPM_MIN_PULSE) / 2) + PPM_HIGH_PULSE))) // Duration of sync pulse
 
-#define STATUS_LED_PIN 0
 #define STATUS_INTERVAL_SIGNAL_LOST 100 // Toggle every 100ms
 #define STATUS_INTERVAL_OK 1000         // Toggle every 1s
 
-#define NAVLIGHT_PIN 18                 // Navigation light pin
 #define NAVLIGHT_INTERVAL 1000          // Toggle every 1s
 
 #define ACK_MIN_SIZE 10
@@ -91,7 +101,9 @@ boolean ppmON = false;
 int pulses[PPM_PULSES];        // PPM pulses
 
 messageState xbeeMsg;  // Message struct for messages from XBee line
+#ifdef ATMEGA644P
 messageState ppzMsg;  // Message struct for messages from PPZ line
+#endif
 #if DEBUG_LEVEL > 0
 messageState dbgMsg;  // Message struct for outgoing debug messages
 #endif
@@ -126,13 +138,17 @@ void setup() {
 	initOutputs();                      // Initialise outputs
 	initPPM();                          // Set default PPM pulses
 	initMessage(&xbeeMsg);              // Init our XBee message
+	#ifdef ATMEGA644P
 	initMessage(&ppzMsg);               // Init our PPZ message
 	ppzMsg.readBytes = MSG_HEADER_SIZE; // Leave room for header addition to PPZ message
+	#endif
 	initTimer();                        // Init our timer
 	Serial.begin(115200);               // Open XBee/GCS Serial
 	Serial.flush();
+	#ifdef ATMEGA644P
 	Serial1.begin(115200);              // Open PPZ Serial
 	Serial1.flush();
+	#endif
   
 	#if DEBUG_LEVEL > 0
 	initMessage(&dbgMsg);      // Init our debug message
@@ -157,7 +173,9 @@ void loop() {
 	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessage functions should be run with a much higher frequency than the LED updates or checkSignal()
   
 		checkXBeeMessages(&xbeeMsg); // Check for incoming XBee messages
+		#ifdef ATMEGA644P
 		checkPPZMessages(&ppzMsg);   // Check for incoming PPZ messages
+		#endif
 
 	}
 
@@ -328,6 +346,7 @@ boolean checkXBeeMessages(messageState *msg) {
 
 /* checkPPZMessages() - Check for and handle any incoming PPZ messages */
 
+#ifdef ATMEGA644P
 boolean checkPPZMessages(messageState *msg) {
 
 	unsigned char testByte = 0x00;
@@ -371,6 +390,7 @@ boolean checkPPZMessages(messageState *msg) {
 	}
 
 }
+#endif
 
 /* processMessage(message, length) - Do whatever the message tells us to do */
 
@@ -423,7 +443,9 @@ void processMessage(messageState *msg) {
 
 	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
 	
+		#ifdef ATMEGA644P
 		writePPZMessage(msg);
+		#endif
 	
 	} else if(msgType == MSG_TYPE_CFG) { // Handle configuration message
 	}
@@ -577,7 +599,11 @@ void checkSignal() {
       
 			TCCR1A = B10000000;                              // Set the pin to go low on compare match
 			TCCR1C = B10000000;                              // Force match, this will force the pin low
+			#ifdef ATMEGA644P
 			DDRD  &= B11011111;                              // Disable output on OC1A      
+			#else
+			DDRB  &= B11111101;                              // Disable output on OC1A
+			#endif
 			#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
 			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Stopping PPM, lostSignal = true-"); // Build debug message
 			writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
@@ -618,7 +644,11 @@ void checkSignal() {
 			OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
 			currentPulse = 1;                       // Set currentPulse to 1 since there will be no ISR() call to increment it
 
+			#ifdef ATMEGA644P
 			DDRD  |= B00100000;                     // Enable output on OC1A
+			#else
+			DDRB  |= B00000010;                     // Enable output on OC1A
+			#endif
   
 			TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A               
 			TCCR1A = B01000011;                     // Fast PWM mode, will generate ISR() when it reaches OCR1A (pulse[0]), thus starting the PPM signal
@@ -697,6 +727,7 @@ void writeXBeeMessage(messageState *msg, unsigned char msgType) {
 
 /* Write a message back to the PPZ port */
 
+#ifdef ATMEGA644P
 void writePPZMessage(messageState *msg) {
    
 	int x;
@@ -709,16 +740,21 @@ void writePPZMessage(messageState *msg) {
 	
 	}
 
-	Serial.write(msg->messageBuffer, msg->length - MSG_HEADER_SIZE);  // Write out the message, minus the header size
+	Serial1.write(msg->messageBuffer, msg->length - MSG_HEADER_SIZE);  // Write out the message, minus the header size
      
 }
+#endif
 
 /* Init our timer */
 
 void initTimer() {
   
 	cli();   
+	#ifdef ATMEGA644P
 	DDRD  &= B11011111; // Disable output on OC1A      
+	#else
+	DDRB  &= B11111101; // Disable output on OC1A
+	#endif
 	TIMSK1 = B00000000; // Disable interrupt on compare match
 	TCCR1A = B00000000; // Disable fast PWM
 	TCCR1B = B00000000; // Disable fast PWM, clock, and prescaler
