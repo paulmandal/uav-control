@@ -36,6 +36,7 @@
 #define VERSION_MAJOR 2     // Major version #
 #define VERSION_MINOR 9     // Minor #
 #define VERSION_MOD   5     // Mod #
+#define VERSION_TAG   "DBG" // Tag
 
 #define MSG_BEGIN     0xFF                    // Begin of control message indicator byte
 #define MSG_TYPE_CTRL 0x01                    // Control update message type indicator
@@ -135,7 +136,7 @@ void setup() {
   
 	#if DEBUG_LEVEL > 0
 	initMessage(&dbgMsg);      // Init our debug message
-	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----joystick2ppm version %d.%d.%d... Open for debugging mode...-", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD);  // Write a debug message leading and trailing dashes will be replaced with header and checksums
+	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----joystick2ppm version %d.%d.%d-%s... Open for debugging mode...-", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);  // Write a debug message leading and trailing dashes will be replaced with header and checksums
 	writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);  // Send debug message
 	#endif
   
