@@ -687,7 +687,6 @@ void translateJStoAF(jsState joystickState) {
 
 	clock_t currTime = clock();
 	int tdiff;
-	int degrees;
 	
 	if(joystickState.axis[CAM_PAN] > 0) {
 	
@@ -695,9 +694,9 @@ void translateJStoAF(jsState joystickState) {
 		if(tdiff > TICKS_PER_DEG) {
 		
 			joystickState.axis[CAM_PAN] = currTime;
-			if(airframState.servos[SRV_CAM_PAN] < 180) {
+			if(airframeState.servos[SRV_CAM_PAN] < 180) {
 
-				airframState.servos[SRV_CAM_PAN]++;
+				airframeState.servos[SRV_CAM_PAN]++;
 			
 			}
 		
@@ -709,9 +708,9 @@ void translateJStoAF(jsState joystickState) {
 		if(tdiff > TICKS_PER_DEG) {
 		
 			joystickState.axis[CAM_PAN] = currTime * -1;
-			if(airframState.servos[SRV_CAM_PAN] > 0) {
+			if(airframeState.servos[SRV_CAM_PAN] > 0) {
 
-				airframState.servos[SRV_CAM_PAN]--;
+				airframeState.servos[SRV_CAM_PAN]--;
 			
 			}
 		
@@ -726,9 +725,9 @@ void translateJStoAF(jsState joystickState) {
 		if(tdiff > TICKS_PER_DEG) {
 		
 			joystickState.axis[CAM_TILT] = currTime;
-			if(airframState.servos[SRV_CAM_TILT] < 180) {
+			if(airframeState.servos[SRV_CAM_TILT] < 180) {
 
-				airframState.servos[SRV_CAM_TILT]++;
+				airframeState.servos[SRV_CAM_TILT]++;
 			
 			}
 		
@@ -740,9 +739,9 @@ void translateJStoAF(jsState joystickState) {
 		if(tdiff > TICKS_PER_DEG) {
 		
 			joystickState.axis[CAM_TILT] = currTime * -1;
-			if(airframState.servos[SRV_CAM_TILT] > 0) {
+			if(airframeState.servos[SRV_CAM_TILT] > 0) {
 
-				airframState.servos[SRV_CAM_TILT]--;
+				airframeState.servos[SRV_CAM_TILT]--;
 			
 			}
 		
