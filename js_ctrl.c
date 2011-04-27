@@ -140,7 +140,6 @@ typedef struct _configValues {
 	char *joystickEventFile; // joystickEvent filename (for RUMBLE!)
 	char *joystickPortFile;  // joystickPort filename
 	char *xbeePortFile;      // xbeePort filename
-	char *ppzPortFile;       // ppzPort filename
 	int *buttonStateCount;   // Button state counts
 	int jsDiscardUnder;	 // Joystick discard under threshold
 	int ppmInterval;	 // Interval to send commands to XBee
@@ -156,10 +155,17 @@ typedef struct _messageState {
 
 } messageState;
 
+typedef struct _ptyInfo {
+
+	int master;
+	char *slaveDevice;
+
+} ptyInfo;
+
 /* Let's do sum prototypes! */
 
 int openPort(char *portName, char *use);
-char *openPty(int *master, char *use);
+int openPty(ptyInfo *pty, char *use);
 int openJoystick(char *portName, jsState *joystickState);
 int readConfig(configValues *configInfo);
 void initTimer(configValues configInfo);
@@ -168,6 +174,7 @@ void translateJStoAF(jsState joystickState);
 void readJoystick(int jsPort, jsState *joystickState, configValues configInfo);
 int initMessage(messageState *message);
 int checkXBeeMessages(int msgPort, messageState *msg);
+int checkPPZMessages(int msgPort, messageState *msg);
 void processMessage(messageState *msg);
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 unsigned char generateChecksum(unsigned char *message, int length);
@@ -192,7 +199,7 @@ unsigned long dpadPressTime[4] = {  // Store last DPad button press time
 // global variables to store states
 
 afState airframeState; // Current airframe state
-int ppzPort;           // PPZ port FD
+ptyInfo ppzPty;
 int xbeePort;          // XBee port FD
 
 int commandsSinceLastAck = 0;  // Commands sent since last ACK
@@ -217,7 +224,6 @@ int main(int argc, char **argv)
 	configValues configInfo;   // Configuration values
 	messageState xbeeMsg;	   // messageState for incoming XBee message
 	messageState ppzMsg;	   // messageState for incoming PPZ message
-	char *ppzSlavePort = NULL; // Name of pty slave device file
 
 	initMessage(&xbeeMsg);
 	initMessage(&ppzMsg);
@@ -239,23 +245,19 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if((ppzSlavePort = openPty(&ppzPort, "PPZ")) != NULL) { // open the PPZ pty
-	
-		printf("PPZ pty file is: %s\n", ppzSlavePort);
-		
-	} else {
-	
-		return 1;
-		
-	}
+	if(openPty(&ppzPty, "PPZ") < 0) { // open the PPZ pty
 
+		return 1;	
+		
+	} 
+	
 	if((jsPort = openJoystick(configInfo.joystickPortFile, &joystickState)) < 0) { // open the Joystick
 		return 1;
 	}
 
 	initTimer(configInfo); 	// Set up timer (every 20ms)
-
-	printf("Ready to read JS & relay for PPZ...\n");
+	printf("\nPPZ pty file is: %s\n\n", ppzPty.slaveDevice);
+	printf("Ready to read JS & relay for PPZ...\n\n");
 
 	while(1) {
 
@@ -300,7 +302,7 @@ int main(int argc, char **argv)
 		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {  // Try to read MSG_BUFFER_SIZE bytes per loop
 
 			checkXBeeMessages(xbeePort, &xbeeMsg); // Check for pending msg bytes
-			//checkPPZMessages(ppzPort, &ppzMsg); // Check for pending msg bytes
+			checkPPZMessages(ppzPty.master, &ppzMsg); // Check for pending msg bytes
 			usleep(10); // Pause for 10usec
 
 		}
@@ -343,24 +345,33 @@ int openPort(char *portName, char *use) {
 
 /* openPty() - Open a pty for communication with the PPZ GCS software */
 
-char *openPty(int *master, char *use) {
+int openPty(ptyInfo *pty, char *use) {
 
-	char *slaveDevice;
-	if((*master = posix_openpt(O_RDWR | O_NOCTTY)) < 0) {  // Create our pty with posix_openpt()
+	printf("Opening pty for %s..\n", use);
+	if((pty->master = posix_openpt(O_RDWR | O_NOCTTY | O_NDELAY)) < 0) {  // Create our pty with posix_openpt()
 	
 		perror("js_ctrl");
-		return NULL;
+		return 0;
 	
 	}
 	
-	if((grantpt(*master) == -1) || (unlockpt(*master) == -1) || ((slaveDevice = ptsname(*master)) == NULL)) { // Grant permissions and unlock our pty, then return the device name for display to the user
+	if((grantpt(pty->master) == -1) || (unlockpt(pty->master) == -1) || ((pty->slaveDevice = ptsname(pty->master)) == NULL)) { // Grant permissions and unlock our pty, then return the device name for display to the user
 	
 		perror("js_ctrl");
-		return NULL;
+		return 0;
 	
 	}
 	
-	return slaveDevice;
+	struct termios options;  // The port opened, set it up the port
+
+	tcgetattr(pty->master, &options);              // Get current settings
+	cfsetispeed(&options, B115200);        // Set input speed to 115200
+	cfsetospeed(&options, B115200);        // Set output speed to 115200
+	options.c_cflag |= (CLOCAL | CREAD);  // Set sum flags (CLOCAL & CREAD)
+	options.c_lflag &= (~ECHO); // Turn local echo off
+	tcsetattr(pty->master, TCSANOW, &options);     // Set options
+	
+	return 1;
 
 }
 
@@ -437,16 +448,6 @@ int readConfig(configValues *configInfo) {
 					configInfo->xbeePortFile = calloc(strlen(line) + 1, sizeof(char)); // Allocate memory for our variable
 					strcpy(configInfo->xbeePortFile, line);                            // Copy value into our var
 					readCount++;                                                       // Increment our value count
-
-				}
-
-			} else if(strcmp(line, "[PPZ Port File]") == 0) {
-
-				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
-
-					configInfo->ppzPortFile = calloc(strlen(line) + 1, sizeof(char));
-					strcpy(configInfo->ppzPortFile, line);
-					readCount++;
 
 				}
 
@@ -554,7 +555,6 @@ int readConfig(configValues *configInfo) {
 
 	printf("\nUsing config from %s:\n", CONFIG_FILE); // Print config values
 	printf("                  XBee Port: %s\n", configInfo->xbeePortFile);
-	printf("                   PPZ Port: %s\n", configInfo->ppzPortFile);
 	printf("              Joystick Port: %s\n", configInfo->joystickPortFile);
 	printf(" Joystick Discard Threshold: %7d\n", configInfo->jsDiscardUnder);
 	printf("               PPM Interval: %7d\n", configInfo->ppmInterval);
@@ -887,7 +887,7 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 
 /* checkPPZMessages() - Check for and handle any incoming PPZ messages */
 
-int checkPPZMessages(messageState *msg) {
+int checkPPZMessages(int msgPort, messageState *msg) {
 
 	unsigned char testByte = 0x00;
 	
@@ -905,6 +905,8 @@ int checkPPZMessages(messageState *msg) {
 			msg->messageBuffer[3] = generateChecksum(msg->messageBuffer, MSG_HEADER_SIZE);
 			msg->messageBuffer[msg->length - 1] = generateChecksum(msg->messageBuffer, msg->length - 1);
 			writePortMsg(xbeePort, "XBee", msg->messageBuffer, msg->length);
+
+			printf("send ppz: %s\n", msg->messageBuffer);
 
 			msg->readBytes = MSG_HEADER_SIZE;  // Leave room for header to be added
                         msg->length = MSG_HEADER_SIZE;
@@ -954,8 +956,7 @@ void processMessage(messageState *msg) {
 		
 		}
 		
-		writePortMsg(ppzPort, "PPZ", msg->messageBuffer, msg->length);
-		printf("PPZ Msg: %s\n", msg->messageBuffer);
+		writePortMsg(ppzPty.master, "PPZ", msg->messageBuffer, msg->length - MSG_HEADER_SIZE); // Write out the message, minus the header size
 	
 	} else if(msgType == MSG_TYPE_CFG) { // This either
 	} else if(msgType == MSG_TYPE_DBG) { // This is a debug message, print it
@@ -1000,7 +1001,6 @@ void writePortMsg(int outputPort, char *portName, unsigned char *message, int me
 		printf("error writing to %s, wrote: %d/%d bytes.\n", portName, msgWrote, messageSize);  // Output error and info on what happened
 
 	}
-
 
 }
 
