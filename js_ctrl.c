@@ -906,8 +906,6 @@ int checkPPZMessages(int msgPort, messageState *msg) {
 			msg->messageBuffer[msg->length - 1] = generateChecksum(msg->messageBuffer, msg->length - 1);
 			writePortMsg(xbeePort, "XBee", msg->messageBuffer, msg->length);
 
-			printf("send ppz: %s\n", msg->messageBuffer);
-
 			msg->readBytes = MSG_HEADER_SIZE;  // Leave room for header to be added
                         msg->length = MSG_HEADER_SIZE;
 			int x;	
