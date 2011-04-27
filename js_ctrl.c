@@ -114,6 +114,8 @@ Adruino:
 #define SRV_CAM_PAN 6
 #define SRV_CAM_TILT 7
 
+#define TICKS_PER_DEG CLOCKS_PER_SEC / 9
+
 #define CONFIG_FILE "js_ctrl.rc"  // Config file name
 #define CONFIG_FILE_MIN_COUNT 8   // # of variables stored in config file 
 
@@ -683,8 +685,70 @@ void translateJStoAF(jsState joystickState) {
 	airframeState.servos[SRV_ESC_LEFT] = throttle_esc;
 	airframeState.servos[SRV_ESC_RIGHT] = throttle_esc;
 
-	airframeState.servos[SRV_CAM_PAN] = map(joystickState.axis[CAM_PAN], -32767, 32767, 0, 180);
-	airframeState.servos[SRV_CAM_TILT] = map(joystickState.axis[CAM_TILT], -32767, 32767, 0, 180);
+	clock_t currTime = clock();
+	int tdiff;
+	int degrees;
+	
+	if(joystickState.axis[CAM_PAN] > 0) {
+	
+		tdiff = currTime - joystickState.axis[CAM_PAN];
+		if(tdiff > TICKS_PER_DEG) {
+		
+			joystickState.axis[CAM_PAN] = currTime;
+			if(airframState.servos[SRV_CAM_PAN] < 180) {
+
+				airframState.servos[SRV_CAM_PAN]++;
+			
+			}
+		
+		}
+	
+	} else if(joystickState.axis[CAM_PAN] < 0) {
+	
+		tdiff = currTime + joystickState.axis[CAM_PAN];
+		if(tdiff > TICKS_PER_DEG) {
+		
+			joystickState.axis[CAM_PAN] = currTime * -1;
+			if(airframState.servos[SRV_CAM_PAN] > 0) {
+
+				airframState.servos[SRV_CAM_PAN]--;
+			
+			}
+		
+		}
+	
+	}
+	
+	
+	if(joystickState.axis[CAM_TILT] > 0) {
+	
+		tdiff = currTime - joystickState.axis[CAM_TILT];
+		if(tdiff > TICKS_PER_DEG) {
+		
+			joystickState.axis[CAM_TILT] = currTime;
+			if(airframState.servos[SRV_CAM_TILT] < 180) {
+
+				airframState.servos[SRV_CAM_TILT]++;
+			
+			}
+		
+		}
+	
+	} else if(joystickState.axis[CAM_TILT] < 0) {
+	
+		tdiff = currTime + joystickState.axis[CAM_TILT];
+		if(tdiff > TICKS_PER_DEG) {
+		
+			joystickState.axis[CAM_TILT] = currTime * -1;
+			if(airframState.servos[SRV_CAM_TILT] > 0) {
+
+				airframState.servos[SRV_CAM_TILT]--;
+			
+			}
+		
+		}
+	
+	}
 
 	for(x = 0 ; x < BUTTON_COUNT ; x++) {
 
@@ -767,6 +831,24 @@ void readJoystick(int jsPort, jsState *joystickState, configValues configInfo) {
 
 					}
 					
+				} else if(js.number == CAM_PAN || js.number == CAM_TILT) { // Check if we're on the CAM axes
+				
+					if(jsValue == 0) {
+					
+						joystickState->axis[js.number] = jsValue; // Unpressed dpad/CAM button, so set it to zero
+					
+					} else {
+					
+						joystickState->axis[js.number] = clock(); // Pressed dpad/CAM button, store timestamp for press time
+						
+						if(jsValue < 0) {
+						
+							joystickState->axis[js.number] = joystickState->axis[js.number] * -1; // Invert timestamp if we were on the negative side of the axis
+						
+						} 
+						
+					}
+				
 				} else {
 
 					joystickState->axis[js.number] = jsValue;  // Regular axis, just store the current value
