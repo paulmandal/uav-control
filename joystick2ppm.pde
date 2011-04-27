@@ -17,6 +17,7 @@
  * ADC: 24, 25, 26, 27, 28, 29 (I think?)
  *
  * There is an option to use this with an ATmega328P in a more limited capacity (e.g. for testing)
+ * by commenting out the #define ATMEGA644P line below
  */
 
 /* Including things */
@@ -25,7 +26,7 @@
 
 /* This is the defining moment of the file */
 
-//#define ATMEGA644P    // Define ATmega644P, otherwise default to ATmega328P code
+#define ATMEGA644P    // Define ATmega644P, otherwise default to ATmega328P code
 
 #define DEBUG_LEVEL 7   // 1 - Messaging debugging
                         // 2 - Servo / pin output
