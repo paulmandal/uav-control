@@ -6,6 +6,7 @@
  * Receives telemetry from UAV, relays to PPZ
  *
  * Special thanks to Vojtech Pavlik <vojtech@ucw.cz>, I adopted much of the joystick code from jstest.c
+ * Special thanks to Johann Deneux <deneux@ifrance.com>, I learned the Force Feedback methods from fftest.c
 */
 
 /*
@@ -1167,8 +1168,10 @@ void sendCtrlUpdate(int signum) {
 
 int checkSignal(int commandsPerAck) {
 
-	if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
+	struct ff_effect effects[2]; // 2 ff_effect structs, for weak and strong rumble
+	struct input_event play, stop; // input_event control to play and stop effects
 
+	if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
 		handShook = 0;  // Turn off handshake so we can resync
 		#if DEBUG_LEVEL != 4
