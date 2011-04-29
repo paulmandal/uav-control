@@ -109,6 +109,12 @@ messageState ppzMsg;  // Message struct for messages from PPZ line
 messageState dbgMsg;  // Message struct for outgoing debug messages
 #endif
 
+#ifdef ATMEGA644P
+int buttonPinMap[BUTTON_COUNT] = {1, 2, 3, 4, 5, -1, -1, 6, 7, 12, 14};
+#else
+int buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, 6, -1, -1, 7, 8, 10, 14};
+#endif
+
 int commandsSinceLastAck = 0;
 unsigned char ackMsg[ACK_MAX_SIZE];
 
@@ -238,7 +244,19 @@ void initPPM() {
 /* initOutputs() - Set output pins up */
 
 void initOutputs() {
-  
+
+  	int x;
+  	
+  	for(x = 0 ; x < BUTTON_COUNT ; x++) {
+  	
+  		if(buttonPinMap[x] > 0) {
+  		
+  			pinMode(buttonPinMap[x], OUTPUT);
+  		
+  		}
+  	
+  	}
+  	
 	pinMode(STATUS_LED_PIN, OUTPUT); // Status LED Pin
 	pinMode(NAVLIGHT_PIN, OUTPUT);   // Navlight LED(s) Pin
   
@@ -691,7 +709,7 @@ void handleControlUpdate() {
 		storePulse(x, servos[x], 0, 180);
 
 	}
-	if(buttons[4] > 0) {
+	if(buttons[4] > 0) { // Handle navlight button
     
 		navlightEnabled = true;  // enable navlight if button 5 is on
     
@@ -700,7 +718,27 @@ void handleControlUpdate() {
 		navlightEnabled = false; // otherwise disable it
     
 	}
-  
+  	for(x = 0 ; x < BUTTON_COUNT ; x++) {
+  	 		  	
+  		if(buttons[x] > 0) {
+  		
+  			if(buttonPinMap[x] > 0) {
+  			
+  				digitalWrite(buttonPinMap[x], HIGH);
+  			
+  			}
+  		
+  		} else {
+  		
+  			if(buttonPinMap[x] > 0) {
+  			
+  				digitalWrite(buttonPinMap[x], LOW);
+  			
+  			}
+  		
+  		}
+  	
+  	}
 	#if DEBUG_LEVEL == 5
 	for(x = 0 ; x < PPM_PULSES ; x++) {
 
