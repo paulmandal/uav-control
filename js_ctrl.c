@@ -66,7 +66,7 @@ Adruino:
 #define MSG_TYPE_SYNC 0xFE    // Sync message type indicator
 #define MSG_BUFFER_SIZE 256   // Message buffer size in bytes
 #define MSG_HEADER_SIZE 4     // Message header size in bytes
-#define CMDS_PER_ACK  60      // Assume lost signal if we send this many commands without an ack
+#define CMDS_PER_ACK  600      // Assume lost signal if we send this many commands without an ack
 
 #define NAME_LENGTH 128       // Length of Joystick name
 #define CAM_PAN 4             // Camera Pan axis #
@@ -1259,7 +1259,7 @@ int checkSignal(int commandsPerAck) {
 
 }
 
-/* printState(axes) - Debug function, prints the current joystick and airframe states */
+/* printState(joystickState) - Debug function, prints the current joystick and airframe states */
 
 void printState(jsState joystickState) {
 
