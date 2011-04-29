@@ -12,7 +12,6 @@
 
 TODO:
 
-- DPad -> servo control
 - Force feedback on RSSI weak/loss
 
 Adruino:
@@ -47,7 +46,7 @@ Adruino:
 
 /* Definitions */
 
-#define DEBUG_LEVEL 1	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 2	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Lost signal debug
 			      // Debug level - 2 - Debug joystick position info
 			      // Debug level - 3 - Debug incoming messages
@@ -66,11 +65,12 @@ Adruino:
 #define MSG_TYPE_SYNC 0xFE    // Sync message type indicator
 #define MSG_BUFFER_SIZE 256   // Message buffer size in bytes
 #define MSG_HEADER_SIZE 4     // Message header size in bytes
-#define CMDS_PER_ACK  600      // Assume lost signal if we send this many commands without an ack
 
 #define NAME_LENGTH 128       // Length of Joystick name
-#define CAM_PAN 4             // Camera Pan axis #
+#define CAM_PAN 4	      // Camera Pan axis #
+#define CAM_PAN_SRC 3         // Camera Pan axis source
 #define CAM_TILT 5            // Camera Tilt axis #
+#define CAM_TILT_SRC 2        // Camera Tilt axis source
 #define ROLL 0                // Roll axis #
 #define PITCH 1               // Pitch axis #
 #define YAW 3                 // Yaw axis #
@@ -114,8 +114,6 @@ Adruino:
 #define SRV_CAM_PAN 6
 #define SRV_CAM_TILT 7
 
-#define TICKS_PER_DEG CLOCKS_PER_SEC / 9
-
 #define CONFIG_FILE "js_ctrl.rc"  // Config file name
 #define CONFIG_FILE_MIN_COUNT 8   // # of variables stored in config file 
 
@@ -146,6 +144,7 @@ typedef struct _configValues {
 	int jsDiscardUnder;	 // Joystick discard under threshold
 	int ppmInterval;	 // Interval to send commands to XBee
 	int commandsPerAck;      // How many commands without ACK before setting lostSignal
+	int contextButton;       // Button that affects joystick context
 
 } configValues;
 
@@ -186,15 +185,6 @@ int checkSignal(int commandsPerAck);
 void printState(jsState joystickState);
 int map(int value, int inRangeLow, int inRangeHigh, int outRangeLow, int outRangeHigh);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
-
-/* Global configuration info */
-
-unsigned long dpadPressTime[4] = {  // Store last DPad button press time
-0,  // DPad right press time
-0,  // DPad left press time
-0,  // DPad up press time
-0   // DPad down press time
-};
 
 /* Global state storage variables */
 
@@ -291,17 +281,17 @@ int main(int argc, char **argv)
 			#endif
 	
 		}
-
-		readJoystick(jsPort, &joystickState, configInfo);  // Check joystick for updates
-
-		translateJStoAF(joystickState);	// update Airframe model
-
-		#if DEBUG_LEVEL == 2
-		printState(joystickState); 	// print JS & AF state
-		#endif
 		
 		int x;
-		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {  // Try to read MSG_BUFFER_SIZE bytes per loop
+		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {  // Try to read MSG_BUFFER_SIZE bytes per loop.. checkSignal() is the only thing we don't really need to do continually
+
+			readJoystick(jsPort, &joystickState, configInfo);  // Check joystick for updates
+		
+			translateJStoAF(joystickState);	// update Airframe model
+
+			#if DEBUG_LEVEL == 2
+			printState(joystickState); 	// print JS & AF state
+			#endif
 
 			checkXBeeMessages(xbeePort, &xbeeMsg); // Check for pending msg bytes
 			checkPPZMessages(ppzPty.master, &ppzMsg); // Check for pending msg bytes
@@ -487,6 +477,15 @@ int readConfig(configValues *configInfo) {
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
 
 					configInfo->ppmInterval = atoi(line); // Translate ASCII -> int
+					readCount++;
+
+				}
+
+			} else if(strcmp(line, "[Context Button]") ==0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					configInfo->contextButton = atoi(line); // Translate ASCII -> int
 					readCount++;
 
 				}
@@ -684,70 +683,9 @@ void translateJStoAF(jsState joystickState) {
 	int throttle_esc = map(joystickState.axis[THROTTLE], 0, 32767, 0, 254);
 	airframeState.servos[SRV_ESC_LEFT] = throttle_esc;
 	airframeState.servos[SRV_ESC_RIGHT] = throttle_esc;
-
-	clock_t currTime = clock();
-	int tdiff;
 	
-	if(joystickState.axis[CAM_PAN] > 0) {
-	
-		tdiff = currTime - joystickState.axis[CAM_PAN];
-		if(tdiff > TICKS_PER_DEG) {
-		
-			joystickState.axis[CAM_PAN] = currTime;
-			if(airframeState.servos[SRV_CAM_PAN] < 180) {
-
-				airframeState.servos[SRV_CAM_PAN]++;
-			
-			}
-		
-		}
-	
-	} else if(joystickState.axis[CAM_PAN] < 0) {
-	
-		tdiff = currTime + joystickState.axis[CAM_PAN];
-		if(tdiff > TICKS_PER_DEG) {
-		
-			joystickState.axis[CAM_PAN] = currTime * -1;
-			if(airframeState.servos[SRV_CAM_PAN] > 0) {
-
-				airframeState.servos[SRV_CAM_PAN]--;
-			
-			}
-		
-		}
-	
-	}
-	
-	
-	if(joystickState.axis[CAM_TILT] > 0) {
-	
-		tdiff = currTime - joystickState.axis[CAM_TILT];
-		if(tdiff > TICKS_PER_DEG) {
-		
-			joystickState.axis[CAM_TILT] = currTime;
-			if(airframeState.servos[SRV_CAM_TILT] < 180) {
-
-				airframeState.servos[SRV_CAM_TILT]++;
-			
-			}
-		
-		}
-	
-	} else if(joystickState.axis[CAM_TILT] < 0) {
-	
-		tdiff = currTime + joystickState.axis[CAM_TILT];
-		if(tdiff > TICKS_PER_DEG) {
-		
-			joystickState.axis[CAM_TILT] = currTime * -1;
-			if(airframeState.servos[SRV_CAM_TILT] > 0) {
-
-				airframeState.servos[SRV_CAM_TILT]--;
-			
-			}
-		
-		}
-	
-	}
+	airframeState.servos[SRV_CAM_PAN] = map(joystickState.axis[CAM_PAN], -32767, 32767, 0, 180);
+	airframeState.servos[SRV_CAM_TILT] = map(joystickState.axis[CAM_TILT], -32767, 32767, 0, 180);
 
 	for(x = 0 ; x < BUTTON_COUNT ; x++) {
 
@@ -805,53 +743,55 @@ void readJoystick(int jsPort, jsState *joystickState, configValues configInfo) {
 
 				}
 
-				if(js.number == THROTTLE) { // Handle throttle axis
+				if(joystickState->button[configInfo.contextButton] > 0) { // Check the context we're working with
+				
+					if(js.number == CAM_PAN_SRC) { // Handle cam pan axis
 
-					jsValue = jsValue * -1;  // Invert the throttle axis
-
-					if(jsValue > 0) {  // Check if the joystick is in the "up" or "down" section of the axis
-
-						if(jsValue > joystickState->prevLeftThrottle) {
-
-							joystickState->axis[js.number] = jsValue;  // Joystick is in the up section and has passed previous max throttles
-							joystickState->prevLeftThrottle = jsValue;
-
-						}
+						joystickState->axis[CAM_PAN] = jsValue; // Store in CAM_PAN instead of js.number since we're in a different context
+					
+					} else if(js.number == CAM_TILT_SRC) {
+									
+						joystickState->axis[CAM_TILT] = jsValue; // Store in CAM_TILT since we're in a different context
 
 					} else {
 
-						jsValue = jsValue + 32767;   // Since we inverted the axis, add the MAX_VAL to this
-						if(jsValue < joystickState->prevLeftThrottle) {  // Joystick is in the down section and has passed the previous min throttle
+						joystickState->axis[js.number] = jsValue;  // Regular axis, just store the current value
 
-							joystickState->axis[js.number] = jsValue;
-							joystickState->prevLeftThrottle = jsValue;
+					}
+				
+				} else { // Normal context
+				
+					if(js.number == THROTTLE) { // Handle throttle axis
+
+						jsValue = jsValue * -1;  // Invert the throttle axis
+
+						if(jsValue > 0) {  // Check if the joystick is in the "up" or "down" section of the axis
+
+							if(jsValue > joystickState->prevLeftThrottle) {
+
+								joystickState->axis[js.number] = jsValue;  // Joystick is in the up section and has passed previous max throttles
+								joystickState->prevLeftThrottle = jsValue;
+
+							}
+
+						} else {
+
+							jsValue = jsValue + 32767;   // Since we inverted the axis, add the MAX_VAL to this
+							if(jsValue < joystickState->prevLeftThrottle) {  // Joystick is in the down section and has passed the previous min throttle
+
+								joystickState->axis[js.number] = jsValue;
+								joystickState->prevLeftThrottle = jsValue;
+
+							}
 
 						}
-
-					}
-					
-				} else if(js.number == CAM_PAN || js.number == CAM_TILT) { // Check if we're on the CAM axes
-				
-					if(jsValue == 0) {
-					
-						joystickState->axis[js.number] = jsValue; // Unpressed dpad/CAM button, so set it to zero
 					
 					} else {
-					
-						joystickState->axis[js.number] = clock(); // Pressed dpad/CAM button, store timestamp for press time
-						
-						if(jsValue < 0) {
-						
-							joystickState->axis[js.number] = joystickState->axis[js.number] * -1; // Invert timestamp if we were on the negative side of the axis
-						
-						} 
-						
+
+						joystickState->axis[js.number] = jsValue;  // Regular axis, just store the current value
+
 					}
 				
-				} else {
-
-					joystickState->axis[js.number] = jsValue;  // Regular axis, just store the current value
-
 				}
 				break;
 

@@ -9,6 +9,8 @@
 [PPM Interval]
 20000
 [Commands Per Ack]
-60
+6000
 [Button State Count]
-0,0,0,0,1,0,0,0,0,0,0,0
+0,0,0,0,1,1,0,0,0,0,0,0
+[Context Button]
+5
