@@ -113,7 +113,7 @@ messageState dbgMsg;  // Message struct for outgoing debug messages
 #ifdef ATMEGA644P
 int buttonPinMap[BUTTON_COUNT] = {1, 2, 3, 4, 5, -1, -1, 6, 7, 12, 14};
 #else
-int buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, 6, -1, -1, 7, 8, 10, 14};
+int buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, 6, -1, -1, 7, 8, 10, A0};
 #endif
 
 int commandsSinceLastAck = 0;
