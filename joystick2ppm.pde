@@ -26,15 +26,16 @@
 
 /* This is the defining moment of the file */
 
-#define ATMEGA644P    // Define ATmega644P, otherwise default to ATmega328P code
+//#define ATMEGA644P    // Define ATmega644P, otherwise default to ATmega328P code
 
-#define DEBUG_LEVEL 7   // 1 - Messaging debugging
+#define DEBUG_LEVEL 0   // 1 - Messaging debugging
                         // 2 - Servo / pin output
                         // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
                         // 4 - Signal continuity (with serial output)
                         // 5 - PPM registers
                         // 6 - PPM pulse values
                         // 7 - Only start debug message
+                        // 8 - Report bad checksums
 
 #ifdef ATMEGA644P
 #define DEBUG_PIN1     4 // Pin for debug signaling
@@ -48,7 +49,7 @@
 
 #define VERSION_MAJOR 2     // Major version #
 #define VERSION_MINOR 9     // Minor #
-#define VERSION_MOD   7     // Mod #
+#define VERSION_MOD   9     // Mod #
 #define VERSION_TAG   "DBG" // Tag
 
 #define MSG_BEGIN     0xFF                    // Begin of control message indicator byte
@@ -232,7 +233,7 @@ void initPPM() {
 	#if DEBUG_LEVEL == 5
 	for(x = 0 ; x < PPM_PULSES ; x++) {
    
-		dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d -", x, pulses[x]); // Build debug message
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d -", x, pulses[x]); // Build debug message
 		writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
     
 	}
@@ -323,7 +324,7 @@ boolean checkXBeeMessages(messageState *msg) {
 			testByte = Serial.read();  // Read our byte		
 
 			#if DEBUG_LEVEL == 1
-			dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----BYTE[%d/%d - CSLA: %d]: %x-", msg->readBytes, msg->length, commandsSinceLastAck, testByte); // Build debug message
+			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----BYTE[%d/%d - CSLA: %d]: %x-", msg->readBytes, msg->length, commandsSinceLastAck, testByte); // Build debug message
 			writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
 			#endif		
 
@@ -375,7 +376,7 @@ boolean checkPPZMessages(messageState *msg) {
 		testByte = Serial1.read();  // Read our byte		
 
 		#if DEBUG_LEVEL == 1
-		dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----PPZBYTE[%d - CSLA: %d]: %x-", dbgMsg.readBytes, commandsSinceLastAck, testByte);
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----PPZBYTE[%d - CSLA: %d]: %x-", dbgMsg.readBytes, commandsSinceLastAck, testByte);
 		writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);
 		#endif		
 
@@ -419,7 +420,7 @@ void processMessage(messageState *msg) {
 	unsigned char msgType = msg->messageBuffer[1];
 
 	#if DEBUG_LEVEL == 1
-	dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CSLA: %d-", commandsSinceLastAck); // Build debug message
+	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CSLA: %d-", commandsSinceLastAck); // Build debug message
 	writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                                // Write debug message
 	#endif
 
@@ -502,21 +503,21 @@ int testChecksum(unsigned char *message, int length) {
 	int x;
 
 	#if DEBUG_LEVEL == 1
-	dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHKMSG:-"); // Build debug message
+	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHKMSG:-"); // Build debug message
 	writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
 	#endif
 
 	for(x = 0 ; x < length ; x++) {
 
 		#if DEBUG_LEVEL == 1
-		dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----%x-", (unsigned int)message[x]); // Build debug message
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----%x-", (unsigned int)message[x]); // Build debug message
 		writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
 		#endif
                 checksum = checksum ^ (unsigned int)message[x];  // Test this message against its checksum (last byte)
 
 	}
 	#if DEBUG_LEVEL == 1
-	dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHK: %x CSLA: %d-", checksum, commandsSinceLastAck); // Build debug message
+	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHK: %x CSLA: %d-", checksum, commandsSinceLastAck); // Build debug message
 	writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message
 	#endif
 
@@ -526,6 +527,10 @@ int testChecksum(unsigned char *message, int length) {
 
 	} else {
 
+		#if DEBUG_LEVEL == 8
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Bad checksum (length: %d): %2x-", length, checksum); // Build debug message
+		writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                         // Write debug message		
+		#endif
 		return false;
 
 	}
@@ -542,7 +547,7 @@ void sendAck() {
         msgSize = random(ACK_MIN_SIZE, ACK_MAX_SIZE); // Sync message is between ACK_MIN_SIZE and ACK_MAX_SIZE chars
         
         #if DEBUG_LEVEL == 1
-      	dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Sending SYNC ACK:-"); // Build debug message
+      	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Sending SYNC ACK:-"); // Build debug message
 	writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                   // Write debug message
 	#endif 
 
@@ -742,7 +747,7 @@ void handleControlUpdate() {
 	#if DEBUG_LEVEL == 5
 	for(x = 0 ; x < PPM_PULSES ; x++) {
 
-		dbgMsg.length = snprintf(dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d-", x, pulses[x]); // Build debug message
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d-", x, pulses[x]); // Build debug message
 		writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                              // Write debug message
     
 	}
