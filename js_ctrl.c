@@ -13,7 +13,7 @@
 
 TODO:
 
-- Force feedback on RSSI weak/loss
+- Force feedback on RSSI weak/loss - supported Sine Wave, Strong Rumble, Weak Rumble
 
 Adruino:
 
@@ -47,15 +47,16 @@ Adruino:
 
 /* Definitions */
 
-#define DEBUG_LEVEL 2	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 5	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Lost signal debug
 			      // Debug level - 2 - Debug joystick position info
 			      // Debug level - 3 - Debug incoming messages
 			      // Debug level - 4 - Time incoming messages
+			      // Debug level - 5 - Bad checksum reports
 
 #define VERSION_MAJOR 2       // Version information, Major #
 #define VERSION_MINOR 9       // Minor #
-#define VERSION_MOD   7       // Mod #
+#define VERSION_MOD   9       // Mod #
 #define VERSION_TAG   "DBG"   // Tag
 
 #define MSG_BEGIN     0xFF    // Begin of control message indicator byte
@@ -256,7 +257,7 @@ int main(int argc, char **argv)
 
 		if(!handShook) {
 
-			#if DEBUG_LEVEL != 4
+			#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
 			printf("Handshaking..");
 			#endif
 			#if DEBUG_LEVEL == 1	
@@ -277,7 +278,7 @@ int main(int argc, char **argv)
 
 			}
 
-			#if DEBUG_LEVEL != 4
+			#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
 			printf("got ACK, handshake complete!\n\n");
 			#endif
 	
@@ -295,7 +296,7 @@ int main(int argc, char **argv)
 			#endif
 
 			checkXBeeMessages(xbeePort, &xbeeMsg); // Check for pending msg bytes
-			checkPPZMessages(ppzPty.master, &ppzMsg); // Check for pending msg bytes
+			//checkPPZMessages(ppzPty.master, &ppzMsg); // Check for pending msg bytes
 			usleep(10); // Pause for 10usec
 
 		}
@@ -844,7 +845,7 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 				msgGood = 1;
 
 
-			} 			
+			} 
 			
 		} 
 		
@@ -1083,11 +1084,30 @@ int testChecksum(unsigned char *message, int length) {
 	#endif	
 
 	if(checksum == 0x00) {
-
+		#if DEBUG_LEVEL == 5
+		printf("++ Good checksum (length: %d): ", length);
+		for(x = 0 ; x < length ; x++) {
+				
+			printf("%2x ", (unsigned int)message[x]); // Print the whole message in hex			
+		
+		}
+		printf("CHK: "); // Print the checksum marker
+		printf("%2x\n", checksum); // Print the checksum
+		#endif	
 		return 1;  // Checksum passed!
 
 	} else {
 
+		#if DEBUG_LEVEL == 5
+		printf("-- Bad checksum (length: %d): ", length);
+		for(x = 0 ; x < length ; x++) {
+				
+			printf("%2x ", (unsigned int)message[x]); // Print the whole message in hex			
+		
+		}
+		printf("CHK: "); // Print the checksum marker
+		printf("%2x\n", checksum); // Print the checksum
+		#endif	
 		return 0;
 
 	}
@@ -1174,7 +1194,7 @@ int checkSignal(int commandsPerAck) {
 	if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
 		handShook = 0;  // Turn off handshake so we can resync
-		#if DEBUG_LEVEL != 4
+		#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
 		printf("Lost signal!  Attempting to resync.\n");
 		#endif
 		#if DEBUG_LEVEL == 1
