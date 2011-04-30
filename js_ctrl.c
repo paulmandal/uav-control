@@ -47,7 +47,7 @@ Adruino:
 
 /* Definitions */
 
-#define DEBUG_LEVEL 5	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 1	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Lost signal debug
 			      // Debug level - 2 - Debug joystick position info
 			      // Debug level - 3 - Debug incoming messages
@@ -745,25 +745,9 @@ void readJoystick(int jsPort, jsState *joystickState, configValues configInfo) {
 
 				}
 
-				if(joystickState->button[configInfo.contextButton] > 0) { // Check the context we're working with
-				
-					if(js.number == CAM_PAN_SRC) { // Handle cam pan axis
+				if(joystickState->button[configInfo.contextButton] == 0) { // Check the context we're working with
 
-						joystickState->axis[CAM_PAN] = jsValue; // Store in CAM_PAN instead of js.number since we're in a different context
-					
-					} else if(js.number == CAM_TILT_SRC) {
-									
-						joystickState->axis[CAM_TILT] = jsValue; // Store in CAM_TILT since we're in a different context
-
-					} else {
-
-						joystickState->axis[js.number] = jsValue;  // Regular axis, just store the current value
-
-					}
-				
-				} else { // Normal context
-				
-					if(js.number == THROTTLE) { // Handle throttle axis
+					if(js.number == THROTTLE) { // Normal context, handle throttle axis
 
 						jsValue = jsValue * -1;  // Invert the throttle axis
 
@@ -793,6 +777,22 @@ void readJoystick(int jsPort, jsState *joystickState, configValues configInfo) {
 						joystickState->axis[js.number] = jsValue;  // Regular axis, just store the current value
 
 					}
+				
+				} else { 
+									
+					if(js.number == CAM_PAN_SRC) { // Handle cam pan axis
+
+						joystickState->axis[CAM_PAN] = jsValue; // Store in CAM_PAN instead of js.number since we're in a different context
+					
+					} else if(js.number == CAM_TILT_SRC) {
+									
+						joystickState->axis[CAM_TILT] = jsValue; // Store in CAM_TILT since we're in a different context
+
+					} else {
+
+						joystickState->axis[js.number] = jsValue;  // Regular axis, just store the current value
+
+					}		
 				
 				}
 				break;
