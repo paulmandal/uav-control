@@ -121,13 +121,15 @@ Adruino:
 
 /* Structures */
 
-typedef struct _jsState {  // Store the axis and button states globally accessible
+typedef struct _jsState {  // Store the axis and button states
+	int port;
 	int *axis;
 	char *button;
 	int prevLeftThrottle;
 	int prevRightThrottle;	
 	unsigned char axes;
 	unsigned char buttons;
+	struct ff_effect effects[2];
 } jsState;
 
 typedef struct _afState { // Store the translated (servo + buttons) states, globally accessible
@@ -173,8 +175,9 @@ int openJoystick(char *portName, jsState *joystickState);
 int readConfig(configValues *configInfo);
 void initTimer(configValues configInfo);
 void initAirframe();
+void initRumble(jsState *joystickState);
 void translateJStoAF(jsState joystickState);
-void readJoystick(int jsPort, jsState *joystickState, configValues configInfo);
+void readJoystick(jsState *joystickState, configValues configInfo);
 int initMessage(messageState *message);
 int checkXBeeMessages(int msgPort, messageState *msg);
 int checkPPZMessages(int msgPort, messageState *msg);
@@ -183,7 +186,7 @@ void writePortMsg(int outputPort, char *portName, unsigned char *message, int me
 unsigned char generateChecksum(unsigned char *message, int length);
 int testChecksum(unsigned char *message, int length);
 void sendCtrlUpdate (int signum);
-int checkSignal(int commandsPerAck);
+int checkSignal(int commandsPerAck, jsState joystickState);
 void printState(jsState joystickState);
 int map(int value, int inRangeLow, int inRangeHigh, int outRangeLow, int outRangeHigh);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
@@ -193,7 +196,7 @@ char *fgetsNoNewline(char *s, int n, FILE *stream);
 // global variables to store states
 
 afState airframeState; // Current airframe state
-ptyInfo ppzPty;
+ptyInfo ppzPty;	       // Pseudoterminal for PPZ comms
 int xbeePort;          // XBee port FD
 
 int commandsSinceLastAck = 0;  // Commands sent since last ACK
@@ -213,7 +216,6 @@ int main(int argc, char **argv)
 {
 
 	startTime = time(NULL);
-	int jsPort;                // JoystickPort FD
 	jsState joystickState;     // Current joystick state
 	configValues configInfo;   // Configuration values
 	messageState xbeeMsg;	   // messageState for incoming XBee message
@@ -245,10 +247,11 @@ int main(int argc, char **argv)
 		
 	} 
 	
-	if((jsPort = openJoystick(configInfo.joystickPortFile, &joystickState)) < 0) { // open the Joystick
+	if(openJoystick(configInfo.joystickPortFile, &joystickState) < 0) { // open the Joystick
 		return 1;
 	}
 
+	initRumble(&joystickState);   // Set up rumble effects
 	initTimer(configInfo); 	// Set up timer (every 20ms)
 	printf("\nPPZ pty file is: %s\n\n", ppzPty.slaveDevice);
 	printf("Ready to read JS & relay for PPZ...\n\n");
@@ -287,7 +290,7 @@ int main(int argc, char **argv)
 		int x;
 		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {  // Try to read MSG_BUFFER_SIZE bytes per loop.. checkSignal() is the only thing we don't really need to do continually
 
-			readJoystick(jsPort, &joystickState, configInfo);  // Check joystick for updates
+			readJoystick(&joystickState, configInfo);  // Check joystick for updates
 		
 			translateJStoAF(joystickState);	// update Airframe model
 
@@ -301,7 +304,7 @@ int main(int argc, char **argv)
 
 		}
 
-		checkSignal(configInfo.commandsPerAck);  // Check if our signal is still good
+		checkSignal(configInfo.commandsPerAck, &joystickState);  // Check if our signal is still good
 	
 	}
 
@@ -416,6 +419,7 @@ int openJoystick(char *portName, jsState *joystickState) {
 		printf("Joystick (%s) initialised with %d axes and %d buttons.\n", name, joystickState->axes, joystickState->buttons);  // Button map is OK, print joystick info
 	}
 
+	joystickState->port = fd;
 	return fd;  // Return joystick file descriptor
 
 }
@@ -622,6 +626,59 @@ void initAirframe() {
 
 }
 
+/* initRumble() - Initalise rumble effects */
+
+void initRumble(jsState *joystickState) {
+
+	/* download a periodic sinusoidal effect */
+	joystickState->effects[0].type = FF_PERIODIC;
+	joystickState->effects[0].id = -1;
+	joystickState->effects[0].u.periodic.waveform = FF_SINE;
+	joystickState->effects[0].u.periodic.period = 0.1*0x100;	/* 0.1 second */
+	joystickState->effects[0].u.periodic.magnitude = 0x4000;	/* 0.5 * Maximum magnitude */
+	joystickState->effects[0].u.periodic.offset = 0;
+	joystickState->effects[0].u.periodic.phase = 0;
+	joystickState->effects[0].direction = 0x4000;	/* Along X axis */
+	joystickState->effects[0].u.periodic.envelope.attack_length = 0x100;
+	joystickState->effects[0].u.periodic.envelope.attack_level = 0;
+	joystickState->effects[0].u.periodic.envelope.fade_length = 0x100;
+	joystickState->effects[0].u.periodic.envelope.fade_level = 0;
+	joystickState->effects[0].trigger.button = 0;
+	joystickState->effects[0].trigger.interval = 0;
+	joystickState->effects[0].replay.length = 1000;  /* 20 seconds */
+	joystickState->effects[0].replay.delay = 0;
+
+	if (ioctl(joystickState->port, EVIOCSFF, joystickState->effects[0]) == -1) {
+		perror("Upload effects[0]");
+	}
+	
+		/* a strong rumbling effect */
+	effects[1].type = FF_RUMBLE;
+	effects[1].id = -1;
+	effects[1].u.rumble.strong_magnitude = 0x8000;
+	effects[1].u.rumble.weak_magnitude = 0;
+	effects[1].replay.length = 1000;
+	effects[1].replay.delay = 0;
+
+	if (ioctl(joystickState->port, EVIOCSFF, joystickState->effects[1]) == -1) {
+		perror("Upload effects[1]");
+	}
+
+	/* a weak rumbling effect */
+	effects[2].type = FF_RUMBLE;
+	effects[2].id = -1;
+	effects[2].u.rumble.strong_magnitude = 0;
+	effects[2].u.rumble.weak_magnitude = 0xc000;
+	effects[2].replay.length = 1000;
+	effects[2].replay.delay = 0;
+
+	if (ioctl(joystickState->port, EVIOCSFF, joystickState->effects[2]) == -1) {
+		perror("Upload effects[2]");
+	}
+		
+
+}
+
 /* translateJStoAF() - Translate current joystick settings to airframe settings (e.g. axis -> servos) */
 
 void translateJStoAF(jsState joystickState) {
@@ -697,14 +754,14 @@ void translateJStoAF(jsState joystickState) {
 
 }
 
-/* readJoystick(jsPort, joystickState) - Read joystick state from jsPort, update joystickState */
+/* readJoystick(joystickState, configInfo) - Read joystick state from joystickState->port, update joystickState */
 
-void readJoystick(int jsPort, jsState *joystickState, configValues configInfo) {
+void readJoystick(jsState *joystickState, configValues configInfo) {
 
 	struct js_event js;
 	int jsValue;
 
-	while(read(jsPort, &js, sizeof(struct js_event)) == sizeof(struct js_event)) {
+	while(read(joystickState->port, &js, sizeof(struct js_event)) == sizeof(struct js_event)) {
 
 			switch(js.type & ~JS_EVENT_INIT) {
 			case JS_EVENT_BUTTON:
@@ -1186,10 +1243,9 @@ void sendCtrlUpdate(int signum) {
 
 /* checkSignal() - Check whether the signal is good, if not RUMBLE!! */
 
-int checkSignal(int commandsPerAck) {
+int checkSignal(int commandsPerAck, jsState joystickState) {
 
-	struct ff_effect effects[2]; // 2 ff_effect structs, for weak and strong rumble
-	struct input_event play, stop; // input_event control to play and stop effects
+	struct input_event play; // input_event control to play and stop effects
 
 	if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
@@ -1206,14 +1262,42 @@ int checkSignal(int commandsPerAck) {
 
 	}
 
-	if(commandsSinceLastAck > 120 && commandsSinceLastAck < 501) {  // Small rumble
+	if(commandsSinceLastAck > 120 && commandsSinceLastAck < 241) {  // Small rumble
 	
+		play.type = EV_FF;
+		play.code = joystickState.effects[0].id;
+		play.value = 1;
+
+		if (write(joystickState->port, (const void*) &play, sizeof(play)) == -1) {
+			perror("Play effect");
+			exit(1);
+		}
 		return 0;
 	
-	} else if(commandsSinceLastAck > 500) {  // 10s!  Big rumble!
-	
+	} else if(commandsSinceLastAck > 240 && commandsSinceLastAck < 481) {  // 10s!  Big rumble!
+
+		play.type = EV_FF;
+		play.code = joystickState.effects[1].id;
+		play.value = 1;
+
+		if (write(joystickState->port, (const void*) &play, sizeof(play)) == -1) {
+			perror("Play effect");
+			exit(1);
+		}	
 		return 0;
+		
+	} else if(commandsSinceLastAck > 480) {
 	
+		play.type = EV_FF;
+		play.code = joystickState.effects[2].id;
+		play.value = 1;
+
+		if (write(joystickState->port, (const void*) &play, sizeof(play)) == -1) {
+			perror("Play effect");
+			exit(1);
+		}	
+		return 0;
+		
 	} else {
 	
 		return 1;
