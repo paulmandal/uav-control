@@ -129,7 +129,7 @@ typedef struct _jsState {  // Store the axis and button states
 	int prevRightThrottle;	
 	unsigned char axes;
 	unsigned char buttons;
-	struct ff_effect effects[2];
+	struct ff_effect effects[3];
 } jsState;
 
 typedef struct _afState { // Store the translated (servo + buttons) states, globally accessible
@@ -304,7 +304,7 @@ int main(int argc, char **argv)
 
 		}
 
-		checkSignal(configInfo.commandsPerAck, &joystickState);  // Check if our signal is still good
+		checkSignal(configInfo.commandsPerAck, joystickState);  // Check if our signal is still good
 	
 	}
 
@@ -653,24 +653,24 @@ void initRumble(jsState *joystickState) {
 	}
 	
 		/* a strong rumbling effect */
-	effects[1].type = FF_RUMBLE;
-	effects[1].id = -1;
-	effects[1].u.rumble.strong_magnitude = 0x8000;
-	effects[1].u.rumble.weak_magnitude = 0;
-	effects[1].replay.length = 1000;
-	effects[1].replay.delay = 0;
+	joystickState->effects[1].type = FF_RUMBLE;
+	joystickState->effects[1].id = -1;
+	joystickState->effects[1].u.rumble.strong_magnitude = 0x8000;
+	joystickState->effects[1].u.rumble.weak_magnitude = 0;
+	joystickState->effects[1].replay.length = 1000;
+	joystickState->effects[1].replay.delay = 0;
 
 	if (ioctl(joystickState->port, EVIOCSFF, joystickState->effects[1]) == -1) {
 		perror("Upload effects[1]");
 	}
 
 	/* a weak rumbling effect */
-	effects[2].type = FF_RUMBLE;
-	effects[2].id = -1;
-	effects[2].u.rumble.strong_magnitude = 0;
-	effects[2].u.rumble.weak_magnitude = 0xc000;
-	effects[2].replay.length = 1000;
-	effects[2].replay.delay = 0;
+	joystickState->effects[2].type = FF_RUMBLE;
+	joystickState->effects[2].id = -1;
+	joystickState->effects[2].u.rumble.strong_magnitude = 0;
+	joystickState->effects[2].u.rumble.weak_magnitude = 0xc000;
+	joystickState->effects[2].replay.length = 1000;
+	joystickState->effects[2].replay.delay = 0;
 
 	if (ioctl(joystickState->port, EVIOCSFF, joystickState->effects[2]) == -1) {
 		perror("Upload effects[2]");
@@ -1268,7 +1268,7 @@ int checkSignal(int commandsPerAck, jsState joystickState) {
 		play.code = joystickState.effects[0].id;
 		play.value = 1;
 
-		if (write(joystickState->port, (const void*) &play, sizeof(play)) == -1) {
+		if (write(joystickState.port, (const void*) &play, sizeof(play)) == -1) {
 			perror("Play effect");
 			exit(1);
 		}
@@ -1280,7 +1280,7 @@ int checkSignal(int commandsPerAck, jsState joystickState) {
 		play.code = joystickState.effects[1].id;
 		play.value = 1;
 
-		if (write(joystickState->port, (const void*) &play, sizeof(play)) == -1) {
+		if (write(joystickState.port, (const void*) &play, sizeof(play)) == -1) {
 			perror("Play effect");
 			exit(1);
 		}	
@@ -1292,7 +1292,7 @@ int checkSignal(int commandsPerAck, jsState joystickState) {
 		play.code = joystickState.effects[2].id;
 		play.value = 1;
 
-		if (write(joystickState->port, (const void*) &play, sizeof(play)) == -1) {
+		if (write(joystickState.port, (const void*) &play, sizeof(play)) == -1) {
 			perror("Play effect");
 			exit(1);
 		}	
