@@ -1261,7 +1261,7 @@ int checkSignal(int commandsPerAck, jsState joystickState) {
 		double signalTimeDiff = difftime(currentTime, lostSignalTime);
 		double rumbleTimeDiff = difftime(currentTime, lastRumbleTime);
 		
-		if(signalTimeDiff > 0 && rumbleTimeDiff > 1 && rumbleLevel < 8) {  // Small rumble
+		if(signalTimeDiff > 0 && rumbleTimeDiff > 1 && rumbleLevel < 7) {  // Small rumble
 	
 			lastRumbleTime = currentTime;
 			
@@ -1276,7 +1276,7 @@ int checkSignal(int commandsPerAck, jsState joystickState) {
 			rumbleLevel++;
 			return 0;
 	
-		} else if(signalTimeDiff > 0 && rumbleTimeDiff > 1 && rumbleLevel == 8) {
+		} else if(signalTimeDiff > 0 && rumbleTimeDiff > 1 && rumbleLevel == 7) {
 	
 			lastRumbleTime = currentTime;	
 			play.type = EV_FF;
