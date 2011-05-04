@@ -130,7 +130,7 @@ typedef struct _jsState {  // Store the axis and button states
 	int prevRightThrottle;	
 	unsigned char axes;
 	unsigned char buttons;
-	struct ff_effect effects[8];
+	struct ff_effect effects[10];
 } jsState;
 
 typedef struct _afState { // Store the translated (servo + buttons) states, globally accessible
@@ -640,29 +640,29 @@ void initRumble(jsState *joystickState) {
 
 	int x;
 	
-	for(x = 0 ; x < 8 ; x++) {
+	for(x = 0 ; x < 5 ; x++) {
 	
-		joystickState->effects[x].type = FF_PERIODIC;
+		joystickState->effects[x].type = FF_RUMBLE;
 		joystickState->effects[x].id = -1;
-		joystickState->effects[x].u.periodic.waveform = FF_SINE;
-		joystickState->effects[x].u.periodic.period = 0.1*0x100;	/* 0.1 second */
-		joystickState->effects[x].u.periodic.magnitude = 0x1000 * x;	/* 0.5 * Maximum magnitude */
-		joystickState->effects[x].u.periodic.offset = 0;
-		joystickState->effects[x].u.periodic.phase = 0;
-		joystickState->effects[x].direction = 0x4000;	/* Along X axis */
-		joystickState->effects[x].u.periodic.envelope.attack_length = 0x100;
-		joystickState->effects[x].u.periodic.envelope.attack_level = 0;
-		joystickState->effects[x].u.periodic.envelope.fade_length = 0x100;
-		joystickState->effects[x].u.periodic.envelope.fade_level = 0;
-		joystickState->effects[x].trigger.button = 0;
-		joystickState->effects[x].trigger.interval = 0;
-		joystickState->effects[x].replay.length = 1500;  /* 2 seconds */
+		joystickState->effects[x].u.rumble.strong_magnitude = 0x0000;
+		joystickState->effects[x].u.rumble.weak_magnitude = (0x2000 * (x + 1)) - 1;
+		joystickState->effects[x].replay.length = 1000;
 		joystickState->effects[x].replay.delay = 0;
-
+		
 		if (ioctl(joystickState->event, EVIOCSFF, &joystickState->effects[x]) == -1) {
 			perror("Upload effects[x]");
 		}
 	
+		joystickState->effects[x + 5].type = FF_RUMBLE;
+		joystickState->effects[x + 5].id = -1;
+		joystickState->effects[x + 5].u.rumble.strong_magnitude = (0x2000 * (x + 1)) - 1;
+		joystickState->effects[x + 5].u.rumble.weak_magnitude = 0xffff;
+		joystickState->effects[x + 5].replay.length = 1000;
+		joystickState->effects[x + 5].replay.delay = 0;
+		
+		if (ioctl(joystickState->event, EVIOCSFF, &joystickState->effects[x + 5]) == -1) {
+			perror("Upload effects[x + 5]");
+		}			
 	}
 
 }
@@ -1261,7 +1261,7 @@ int checkSignal(int commandsPerAck, jsState joystickState) {
 		double signalTimeDiff = difftime(currentTime, lostSignalTime);
 		double rumbleTimeDiff = difftime(currentTime, lastRumbleTime);
 		
-		if(signalTimeDiff > 0 && rumbleTimeDiff > 1 && rumbleLevel < 7) {  // Small rumble
+		if(signalTimeDiff > 0 && rumbleTimeDiff > 0.5 && rumbleLevel < 9) {  // Small rumble
 	
 			lastRumbleTime = currentTime;
 			
@@ -1276,7 +1276,7 @@ int checkSignal(int commandsPerAck, jsState joystickState) {
 			rumbleLevel++;
 			return 0;
 	
-		} else if(signalTimeDiff > 0 && rumbleTimeDiff > 1 && rumbleLevel == 7) {
+		} else if(signalTimeDiff > 0 && rumbleTimeDiff > 0.5 && rumbleLevel == 9) {
 	
 			lastRumbleTime = currentTime;	
 			play.type = EV_FF;
