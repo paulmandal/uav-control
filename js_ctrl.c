@@ -123,6 +123,7 @@ Adruino:
 
 typedef struct _jsState {  // Store the axis and button states
 	int port;
+	int event;
 	int *axis;
 	char *button;
 	int prevLeftThrottle;
@@ -171,7 +172,7 @@ typedef struct _ptyInfo {
 
 int openPort(char *portName, char *use);
 int openPty(ptyInfo *pty, char *use);
-int openJoystick(char *portName, jsState *joystickState);
+int openJoystick(configValues configInfo, jsState *joystickState);
 int readConfig(configValues *configInfo);
 void initTimer(configValues configInfo);
 void initAirframe();
@@ -199,8 +200,10 @@ afState airframeState; // Current airframe state
 ptyInfo ppzPty;	       // Pseudoterminal for PPZ comms
 int xbeePort;          // XBee port FD
 
-int commandsSinceLastAck = 0;  // Commands sent since last ACK
-int handShook = 0;             // Handshook?
+int commandsSinceLastAck = 0; // Commands sent since last ACK
+int handShook = 0;            // Handshook?
+time_t lostSignalTime;        // Time signal was lost
+time_t lastRumbleTime;
 
 unsigned long totalMsgs = 0;
 
@@ -210,12 +213,15 @@ int debugCommandsPerAck = 0;
 
 time_t startTime;
 
+
 /* Main function */
 
 int main(int argc, char **argv)
 {
 
 	startTime = time(NULL);
+	lostSignalTime = time(NULL);
+	lastRumbleTime = time(NULL);
 	jsState joystickState;     // Current joystick state
 	configValues configInfo;   // Configuration values
 	messageState xbeeMsg;	   // messageState for incoming XBee message
@@ -247,7 +253,7 @@ int main(int argc, char **argv)
 		
 	} 
 	
-	if(openJoystick(configInfo.joystickPortFile, &joystickState) < 0) { // open the Joystick
+	if(openJoystick(configInfo, &joystickState) < 0) { // open the Joystick
 		return 1;
 	}
 
@@ -269,15 +275,9 @@ int main(int argc, char **argv)
 
 			while(!handShook) {  // Handshaking loop
 
-				if(!checkXBeeMessages(xbeePort, &xbeeMsg)) { // Check for pending msg bytes
-
-					usleep(100); // If nothing is there pause for 100usec, handshake is sent out by interrupt at 50Hz
-
-				} else {
-				
-					usleep(10); // Give 10usec for character to be removed from buffer by read()
-				
-				}
+				checkXBeeMessages(xbeePort, &xbeeMsg); // Check for pending msg bytes
+				usleep(10); // Give 10usec for character to be removed from buffer by read()
+				checkSignal(configInfo.commandsPerAck, joystickState); // call checkSignal() to allow rumble
 
 			}
 
@@ -374,17 +374,17 @@ int openPty(ptyInfo *pty, char *use) {
 
 /* openJoystick() - Open the joystick port portName */
 
-int openJoystick(char *portName, jsState *joystickState) {
+int openJoystick(configValues configInfo, jsState *joystickState) {
 
 	uint16_t btnmap[BTNMAP_SIZE];
 	uint8_t axmap[AXMAP_SIZE];
 	int btnmapok = 1;
 	int version = 0x000800;
 	char name[NAME_LENGTH] = "Unknown";
-	int fd, i;
+	int fd, efd, i;
 
-	printf("Opening joystick %s..\n", portName);
-	if ((fd = open(portName, O_RDONLY | O_NONBLOCK)) < 0) {  // Open joystick port in non-blocking mode
+	printf("Opening joystick %s..\n", configInfo.joystickPortFile);
+	if ((fd = open(configInfo.joystickPortFile, O_RDWR | O_NONBLOCK)) < 0) {  // Open joystick port in non-blocking mode
 		perror("js_ctrl");  // Error opening port
 		return -1;
 	}
@@ -419,8 +419,15 @@ int openJoystick(char *portName, jsState *joystickState) {
 		printf("Joystick (%s) initialised with %d axes and %d buttons.\n", name, joystickState->axes, joystickState->buttons);  // Button map is OK, print joystick info
 	}
 
-	joystickState->port = fd;
-	return fd;  // Return joystick file descriptor
+	printf("Opening joystick event file %s..\n", configInfo.joystickEventFile);
+	if ((efd = open(configInfo.joystickEventFile, O_RDWR)) < 0) {  // Open joystick port in non-blocking mode
+		perror("js_ctrl");  // Error opening port
+		return -1;
+	}
+
+	joystickState->port = fd;   // Store joystick Port file descriptor
+	joystickState->event = efd; // Store joystick Event file descriptor
+	return 0;
 
 }
 
@@ -630,52 +637,51 @@ void initAirframe() {
 
 void initRumble(jsState *joystickState) {
 
-	/* download a periodic sinusoidal effect */
-	joystickState->effects[0].type = FF_PERIODIC;
+	/* a weak rumbling effect */
+	joystickState->effects[0].type = FF_RUMBLE;
 	joystickState->effects[0].id = -1;
-	joystickState->effects[0].u.periodic.waveform = FF_SINE;
-	joystickState->effects[0].u.periodic.period = 0.1*0x100;	/* 0.1 second */
-	joystickState->effects[0].u.periodic.magnitude = 0x4000;	/* 0.5 * Maximum magnitude */
-	joystickState->effects[0].u.periodic.offset = 0;
-	joystickState->effects[0].u.periodic.phase = 0;
-	joystickState->effects[0].direction = 0x4000;	/* Along X axis */
-	joystickState->effects[0].u.periodic.envelope.attack_length = 0x100;
-	joystickState->effects[0].u.periodic.envelope.attack_level = 0;
-	joystickState->effects[0].u.periodic.envelope.fade_length = 0x100;
-	joystickState->effects[0].u.periodic.envelope.fade_level = 0;
-	joystickState->effects[0].trigger.button = 0;
-	joystickState->effects[0].trigger.interval = 0;
-	joystickState->effects[0].replay.length = 1000;  /* 20 seconds */
+	joystickState->effects[0].u.rumble.strong_magnitude = 0;
+	joystickState->effects[0].u.rumble.weak_magnitude = 0xc000;
+	joystickState->effects[0].replay.length = 2500;
 	joystickState->effects[0].replay.delay = 0;
 
-	if (ioctl(joystickState->port, EVIOCSFF, joystickState->effects[0]) == -1) {
+	if (ioctl(joystickState->event, EVIOCSFF, &joystickState->effects[0]) == -1) {
 		perror("Upload effects[0]");
 	}
-	
-		/* a strong rumbling effect */
+
+	/* a strong rumbling effect */
 	joystickState->effects[1].type = FF_RUMBLE;
 	joystickState->effects[1].id = -1;
 	joystickState->effects[1].u.rumble.strong_magnitude = 0x8000;
 	joystickState->effects[1].u.rumble.weak_magnitude = 0;
-	joystickState->effects[1].replay.length = 1000;
+	joystickState->effects[1].replay.length = 2500;
 	joystickState->effects[1].replay.delay = 0;
 
-	if (ioctl(joystickState->port, EVIOCSFF, joystickState->effects[1]) == -1) {
+	if (ioctl(joystickState->event, EVIOCSFF, &joystickState->effects[1]) == -1) {
 		perror("Upload effects[1]");
 	}
-
-	/* a weak rumbling effect */
-	joystickState->effects[2].type = FF_RUMBLE;
+		
+	/* download a periodic sinusoidal effect */
+	joystickState->effects[2].type = FF_PERIODIC;
 	joystickState->effects[2].id = -1;
-	joystickState->effects[2].u.rumble.strong_magnitude = 0;
-	joystickState->effects[2].u.rumble.weak_magnitude = 0xc000;
-	joystickState->effects[2].replay.length = 1000;
+	joystickState->effects[2].u.periodic.waveform = FF_SINE;
+	joystickState->effects[2].u.periodic.period = 0.1*0x100;	/* 0.1 second */
+	joystickState->effects[2].u.periodic.magnitude = 0x4000;	/* 0.5 * Maximum magnitude */
+	joystickState->effects[2].u.periodic.offset = 0;
+	joystickState->effects[2].u.periodic.phase = 0;
+	joystickState->effects[2].direction = 0x4000;	/* Along X axis */
+	joystickState->effects[2].u.periodic.envelope.attack_length = 0x100;
+	joystickState->effects[2].u.periodic.envelope.attack_level = 0;
+	joystickState->effects[2].u.periodic.envelope.fade_length = 0x100;
+	joystickState->effects[2].u.periodic.envelope.fade_level = 0;
+	joystickState->effects[2].trigger.button = 0;
+	joystickState->effects[2].trigger.interval = 0;
+	joystickState->effects[2].replay.length = 2500;  /* 2 seconds */
 	joystickState->effects[2].replay.delay = 0;
 
-	if (ioctl(joystickState->port, EVIOCSFF, joystickState->effects[2]) == -1) {
+	if (ioctl(joystickState->event, EVIOCSFF, &joystickState->effects[2]) == -1) {
 		perror("Upload effects[2]");
 	}
-		
 
 }
 
@@ -1207,7 +1213,7 @@ void sendCtrlUpdate(int signum) {
 		ctrlMsg[msgSize - 1] = generateChecksum(ctrlMsg, msgSize - 1); // Store our checksum as our last byte
 
 		writePortMsg(xbeePort, "XBee", ctrlMsg, msgSize); // Write out message to XBee
-		free(ctrlMsg); // Deallocate memory for ctrlMsg
+		free(ctrlMsg); // Deallocate memory for ctrlMsg	
 		totalMsgs++;
 		commandsSinceLastAck++;
 	
@@ -1239,6 +1245,7 @@ void sendCtrlUpdate(int signum) {
 		free(handshakeMsg); // De-allocate memory for handshakeMsg
 
 	}
+
 }
 
 /* checkSignal() - Check whether the signal is good, if not RUMBLE!! */
@@ -1247,62 +1254,74 @@ int checkSignal(int commandsPerAck, jsState joystickState) {
 
 	struct input_event play; // input_event control to play and stop effects
 
-	if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
-
-		handShook = 0;  // Turn off handshake so we can resync
-		#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
-		printf("Lost signal!  Attempting to resync.\n");
-		#endif
-		#if DEBUG_LEVEL == 1
-		time_t currentTime = time(NULL);
-		time_t diff = currentTime - startTime;
-		printf("CSLA: %3d Total msgs: %lu Running: %lds\n", commandsSinceLastAck, totalMsgs, diff);
-		#endif
-		return 0;
-
-	}
-
-	if(commandsSinceLastAck > 120 && commandsSinceLastAck < 241) {  // Small rumble
+	if(handShook) { 
 	
-		play.type = EV_FF;
-		play.code = joystickState.effects[0].id;
-		play.value = 1;
+		if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
-		if (write(joystickState.port, (const void*) &play, sizeof(play)) == -1) {
-			perror("Play effect");
-			exit(1);
+			handShook = 0;  // Turn off handshake so we can resync
+			lostSignalTime = time(NULL); // Store time we lost the signal
+			#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
+			printf("Lost signal!  Attempting to resync.\n");
+			#endif
+			#if DEBUG_LEVEL == 1
+			time_t currentTime = time(NULL);
+			time_t diff = currentTime - startTime;
+			printf("CSLA: %3d Total msgs: %lu Running: %lds\n", commandsSinceLastAck, totalMsgs, diff);
+			#endif
+			return 0;
+
 		}
-		return 0;
-	
-	} else if(commandsSinceLastAck > 240 && commandsSinceLastAck < 481) {  // 10s!  Big rumble!
-
-		play.type = EV_FF;
-		play.code = joystickState.effects[1].id;
-		play.value = 1;
-
-		if (write(joystickState.port, (const void*) &play, sizeof(play)) == -1) {
-			perror("Play effect");
-			exit(1);
-		}	
-		return 0;
-		
-	} else if(commandsSinceLastAck > 480) {
-	
-		play.type = EV_FF;
-		play.code = joystickState.effects[2].id;
-		play.value = 1;
-
-		if (write(joystickState.port, (const void*) &play, sizeof(play)) == -1) {
-			perror("Play effect");
-			exit(1);
-		}	
-		return 0;
 		
 	} else {
+
+		time_t currentTime = time(NULL); // get current time
+		double signalTimeDiff = difftime(currentTime, lostSignalTime);
+		double rumbleTimeDiff = difftime(currentTime, lastRumbleTime);
+		
+		if(signalTimeDiff > 0 && signalTimeDiff < 2 && rumbleTimeDiff > 1) {  // Small rumble
 	
-		return 1;
+			lastRumbleTime = currentTime;
+			play.type = EV_FF;
+			play.code = joystickState.effects[0].id;
+			play.value = 1;
+
+			if (write(joystickState.event, (const void*) &play, sizeof(play)) == -1) {
+				perror("Play effect");
+				exit(1);
+			}
+			return 0;
+	
+		} else if(signalTimeDiff > 2 && signalTimeDiff < 4 && rumbleTimeDiff > 1) {  // 10s!  Big rumble!
+
+			lastRumbleTime = currentTime;
+			play.type = EV_FF;
+			play.code = joystickState.effects[1].id;
+			play.value = 1;
+
+			if (write(joystickState.event, (const void*) &play, sizeof(play)) == -1) {
+				perror("Play effect");
+				exit(1);
+			}		
+			return 0;
+		
+		} else if(signalTimeDiff > 4 && rumbleTimeDiff > 1) {
+	
+			lastRumbleTime = currentTime;	
+			play.type = EV_FF;
+			play.code = joystickState.effects[2].id;
+			play.value = 1;
+
+			if (write(joystickState.event, (const void*) &play, sizeof(play)) == -1) {
+				perror("Play effect");
+				exit(1);
+			}		
+			return 0;
+		
+		}
 	
 	}
+	
+	return 1; // Should never get here
 
 }
 
