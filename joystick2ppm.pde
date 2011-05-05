@@ -45,9 +45,9 @@
 #define NAVLIGHT_PIN   11 // Navigation light pin  
 #endif
 
-#define VERSION_MAJOR 2     // Major version #
-#define VERSION_MINOR 9     // Minor #
-#define VERSION_MOD   9     // Mod #
+#define VERSION_MAJOR 3     // Major version #
+#define VERSION_MINOR 0     // Minor #
+#define VERSION_MOD   1     // Mod #
 #define VERSION_TAG   "DBG" // Tag
 
 #define MSG_BEGIN     0xFF                    // Begin of control message indicator byte
