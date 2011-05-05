@@ -48,7 +48,7 @@ Adruino:
 
 /* Definitions */
 
-#define DEBUG_LEVEL 1	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 0	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Lost signal debug
 			      // Debug level - 2 - Debug joystick position info
 			      // Debug level - 3 - Debug incoming messages
@@ -79,8 +79,12 @@ Adruino:
 #define YAW 3                 // Yaw axis #
 #define THROTTLE 2            // Throttle axis #
 
-#define SERVO_COUNT 8         // Total servos on airframe
+#define SERVO_COUNT  8        // Total servos on airframe
+#define ESC_COUNT    2	      // ESCs on airframe
 #define BUTTON_COUNT 12       // Buttons on joystick
+
+#define ESC_LEFT 0
+#define ESC_RIGHT 1
 
 #define SRV_L_MAX 180
 #define SRV_L_MIN 0
@@ -129,8 +133,6 @@ typedef struct _jsState {  // Store the axis and button states
 	int event;
 	int *axis;
 	char *button;
-	int prevLeftThrottle;
-	int prevRightThrottle;
 	int rumbleLevel;
 	time_t lastRumbleTime;	
 	unsigned char axes;
@@ -140,6 +142,7 @@ typedef struct _jsState {  // Store the axis and button states
 
 typedef struct _afState { // Store the translated (servo + buttons) states, globally accessible
 
+	int escs[ESC_COUNT];
 	unsigned int servos[SERVO_COUNT];
 	unsigned int buttons[BUTTON_COUNT];
 
@@ -173,6 +176,22 @@ typedef struct _ptyInfo {
 
 } ptyInfo;
 
+typedef struct _portState {
+
+	ptyInfo ppzPty;	       // Pseudoterminal for PPZ comms
+	int xbeePort;          // XBee port FD
+
+} portState;
+
+typedef struct _signalState {
+
+	int commandsSinceLastAck; // Commands sent since last ACK
+	int handShook;            // Handshook?
+	time_t lostSignalTime;    // Time signal was lost
+	unsigned long totalMsgs = 0;
+
+} signalState;
+
 /* Let's do sum prototypes! */
 
 int openPort(char *portName, char *use);
@@ -202,14 +221,8 @@ char *fgetsNoNewline(char *s, int n, FILE *stream);
 // global variables to store states
 
 afState airframeState; // Current airframe state
-ptyInfo ppzPty;	       // Pseudoterminal for PPZ comms
-int xbeePort;          // XBee port FD
-
-int commandsSinceLastAck = 0; // Commands sent since last ACK
-int handShook = 0;            // Handshook?
-time_t lostSignalTime;        // Time signal was lost
-
-unsigned long totalMsgs = 0;
+portState ports;
+signalState signal;
 
 #if DEBUG_LEVEL > 0
 int debugCommandsPerAck = 0;
@@ -217,21 +230,22 @@ int debugCommandsPerAck = 0;
 
 time_t startTime;
 
-
 /* Main function */
 
 int main(int argc, char **argv)
 {
 
 	startTime = time(NULL);
-	lostSignalTime = time(NULL);
 	jsState joystickState;     // Current joystick state
 	configValues configInfo;   // Configuration values
 	messageState xbeeMsg;	   // messageState for incoming XBee message
 	messageState ppzMsg;	   // messageState for incoming PPZ message
+	
+	initGlobals();
 
 	initMessage(&xbeeMsg);
 	initMessage(&ppzMsg);
+	
 	ppzMsg.readBytes = MSG_HEADER_SIZE; // Leave space for the addition of a header to the msg from GCS
 	
 	printf("Starting js_crl version %d.%d.%d-%s...\n", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);  // Print version information
@@ -246,11 +260,11 @@ int main(int argc, char **argv)
 
 	initAirframe();  // Init airframe state
 
-	if((xbeePort = openPort(configInfo.xbeePortFile, "XBee")) < 0) { // open the XBee port
+	if((ports.xbeePort = openPort(configInfo.xbeePortFile, "XBee")) < 0) { // open the XBee port
 		return 1;
 	}
 
-	if(openPty(&ppzPty, "PPZ") < 0) { // open the PPZ pty
+	if(openPty(&ports.ppzPty, "PPZ") < 0) { // open the PPZ pty
 
 		return 1;	
 		
@@ -262,12 +276,12 @@ int main(int argc, char **argv)
 
 	initRumble(&joystickState);   // Set up rumble effects
 	initTimer(configInfo); 	// Set up timer (every 20ms)
-	printf("\nPPZ pty file is: %s\n\n", ppzPty.slaveDevice);
+	printf("\nPPZ pty file is: %s\n\n", ports.ppzPty.slaveDevice);
 	printf("Ready to read JS & relay for PPZ...\n\n");
 
 	while(1) {
 
-		if(!handShook) {
+		if(!signal.handShook) {
 
 			#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
 			printf("Handshaking..");
@@ -276,9 +290,9 @@ int main(int argc, char **argv)
 			printf("\n");
 			#endif
 
-			while(!handShook) {  // Handshaking loop
+			while(!signal.handShook) {  // Handshaking loop
 
-				checkXBeeMessages(xbeePort, &xbeeMsg); // Check for pending msg bytes
+				checkXBeeMessages(ports.xbeePort, &xbeeMsg); // Check for pending msg bytes
 				usleep(10); // Give 10usec for character to be removed from buffer by read()
 				checkSignal(configInfo.commandsPerAck, &joystickState); // call checkSignal() to allow rumble
 
@@ -301,8 +315,8 @@ int main(int argc, char **argv)
 			printState(joystickState); 	// print JS & AF state
 			#endif
 
-			checkXBeeMessages(xbeePort, &xbeeMsg); // Check for pending msg bytes
-			//checkPPZMessages(ppzPty.master, &ppzMsg); // Check for pending msg bytes
+			checkXBeeMessages(ports.xbeePort, &xbeeMsg); // Check for pending msg bytes
+			//checkPPZMessages(ports.ppzPty.master, &ppzMsg); // Check for pending msg bytes
 			usleep(10); // Pause for 10usec
 
 		}
@@ -318,6 +332,16 @@ int main(int argc, char **argv)
 }
 
 /* Function definitions */
+
+/* initGlobals() - initalise all global vars */
+
+void initGlobals() {
+
+	signal.commandsSinceLastAck = 0;
+	signal.handShook = 0;
+	signal.lostSignalTime = time(NULL);
+	
+}
 
 /* openPort(portName, use) - Open a UART portName for usage use */
 
@@ -795,36 +819,7 @@ void readJoystick(jsState *joystickState, configValues configInfo) {
 
 				if(joystickState->button[configInfo.contextButton] == 0) { // Check the context we're working with
 
-					if(js.number == THROTTLE) { // Normal context, handle throttle axis
-
-						jsValue = jsValue * -1;  // Invert the throttle axis
-
-						if(jsValue > 0) {  // Check if the joystick is in the "up" or "down" section of the axis
-
-							if(jsValue > joystickState->prevLeftThrottle) {
-
-								joystickState->axis[js.number] = jsValue;  // Joystick is in the up section and has passed previous max throttles
-								joystickState->prevLeftThrottle = jsValue;
-
-							}
-
-						} else {
-
-							jsValue = jsValue + 32767;   // Since we inverted the axis, add the MAX_VAL to this
-							if(jsValue < joystickState->prevLeftThrottle) {  // Joystick is in the down section and has passed the previous min throttle
-
-								joystickState->axis[js.number] = jsValue;
-								joystickState->prevLeftThrottle = jsValue;
-
-							}
-
-						}
-					
-					} else {
-
-						joystickState->axis[js.number] = jsValue;  // Regular axis, just store the current value
-
-					}
+					joystickState->axis[js.number] = jsValue;  // Regular axis, just store the current value
 				
 				} else { 
 									
@@ -917,7 +912,7 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 		if(read(msgPort, &testByte, sizeof(char)) == sizeof(char)) {  // We read a byte, so process it
 
 			#if DEBUG_LEVEL == 3
-			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x\n", msg->readBytes, msg->length, handShook, commandsSinceLastAck, testByte); // Print out each received byte	
+			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x\n", msg->readBytes, msg->length, signal.handShook, signal.commandsSinceLastAck, testByte); // Print out each received byte	
 			#endif		
 
 			msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
@@ -975,7 +970,7 @@ int checkPPZMessages(int msgPort, messageState *msg) {
 			msg->messageBuffer[2] = msg->length;
 			msg->messageBuffer[3] = generateChecksum(msg->messageBuffer, MSG_HEADER_SIZE);
 			msg->messageBuffer[msg->length - 1] = generateChecksum(msg->messageBuffer, msg->length - 1);
-			writePortMsg(xbeePort, "XBee", msg->messageBuffer, msg->length);
+			writePortMsg(ports.xbeePort, "XBee", msg->messageBuffer, msg->length);
 
 			msg->readBytes = MSG_HEADER_SIZE;  // Leave room for header to be added
                         msg->length = MSG_HEADER_SIZE;
@@ -1009,10 +1004,10 @@ void processMessage(messageState *msg) {
 
 	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
-		handShook = 1;
-		commandsSinceLastAck = 0;
+		signal.handShook = 1;
+		signal.commandsSinceLastAck = 0;
 		#if DEBUG_LEVEL == 3
-		printf("Got sync msg, CSLA: %3d/%3d\n", commandsSinceLastAck, debugCommandsPerAck);
+		printf("Got sync msg, CSLA: %3d/%3d\n", signal.commandsSinceLastAck, debugCommandsPerAck);
 		#endif
 
 	} else if(msgType == MSG_TYPE_CTRL) { // We shouldn't get this from the Arduino
@@ -1025,7 +1020,7 @@ void processMessage(messageState *msg) {
 		
 		}
 		
-		writePortMsg(ppzPty.master, "PPZ", msg->messageBuffer, msg->length - MSG_HEADER_SIZE); // Write out the message, minus the header size
+		writePortMsg(ports.ppzPty.master, "PPZ", msg->messageBuffer, msg->length - MSG_HEADER_SIZE); // Write out the message, minus the header size
 	
 	} else if(msgType == MSG_TYPE_CFG) { // This either
 	} else if(msgType == MSG_TYPE_DBG) { // This is a debug message, print it
@@ -1168,7 +1163,7 @@ void sendCtrlUpdate(int signum) {
 	
 	int x;
 
-	if(handShook) {	// We're synced up, send a control update
+	if(signal.handShook) {	// We're synced up, send a control update
 
 		int msgSize = MSG_HEADER_SIZE + SERVO_COUNT + 3 + 1; // MSG_HEADER_SIZE + 1 byte per servo + 3 bytes buttons + 1 checksum byte
 		int buttonOffset = MSG_HEADER_SIZE + SERVO_COUNT;
@@ -1197,10 +1192,10 @@ void sendCtrlUpdate(int signum) {
 
 		ctrlMsg[msgSize - 1] = generateChecksum(ctrlMsg, msgSize - 1); // Store our checksum as our last byte
 
-		writePortMsg(xbeePort, "XBee", ctrlMsg, msgSize); // Write out message to XBee
+		writePortMsg(ports.xbeePort, "XBee", ctrlMsg, msgSize); // Write out message to XBee
 		free(ctrlMsg); // Deallocate memory for ctrlMsg	
-		totalMsgs++;
-		commandsSinceLastAck++;
+		signal.totalMsgs++;
+		signal.commandsSinceLastAck++;
 	
 	} else {  // We aren't synced up, send sync msg
 
@@ -1226,7 +1221,7 @@ void sendCtrlUpdate(int signum) {
 		printf(".");
 		#endif
 		fflush(stdout);
-		writePortMsg(xbeePort, "XBee", handshakeMsg, msgSize);  // Write the handshake to the XBee port
+		writePortMsg(ports.xbeePort, "XBee", handshakeMsg, msgSize);  // Write the handshake to the XBee port
 		free(handshakeMsg); // De-allocate memory for handshakeMsg
 
 	}
@@ -1239,7 +1234,7 @@ int checkSignal(int commandsPerAck, jsState *joystickState) {
 
 	struct input_event play; // input_event control to play and stop effects
 
-	if(handShook) { 
+	if(signal.handShook) { 
 	
 		if(joystickState->rumbleLevel == EFFECTS_COUNT - 1) {
 		
@@ -1247,17 +1242,17 @@ int checkSignal(int commandsPerAck, jsState *joystickState) {
 		
 		}
 	
-		if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
+		if(signal.commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
-			handShook = 0;  // Turn off handshake so we can resync
-			lostSignalTime = time(NULL); // Store time we lost the signal
+			signal.handShook = 0;  // Turn off handshake so we can resync
+			signal.lostSignalTime = time(NULL); // Store time we lost the signal
 			#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
 			printf("Lost signal!  Attempting to resync.\n");
 			#endif
 			#if DEBUG_LEVEL == 1
 			time_t currentTime = time(NULL);
 			time_t diff = currentTime - startTime;
-			printf("CSLA: %3d Total msgs: %lu Running: %lds\n", commandsSinceLastAck, totalMsgs, diff);
+			printf("CSLA: %3d Total msgs: %lu Running: %lds\n", signal.commandsSinceLastAck, signal.totalMsgs, diff);
 			#endif
 			return 0;
 
@@ -1266,7 +1261,7 @@ int checkSignal(int commandsPerAck, jsState *joystickState) {
 	} else {
 
 		time_t currentTime = time(NULL); // get current time
-		double signalTimeDiff = difftime(currentTime, lostSignalTime);
+		double signalTimeDiff = difftime(currentTime, signal.lostSignalTime);
 		double rumbleTimeDiff = difftime(currentTime, joystickState->lastRumbleTime);
 		
 		if(signalTimeDiff > 0 && rumbleTimeDiff > 0.5 && joystickState->rumbleLevel < (EFFECTS_COUNT - 1)) {  // Small rumble
