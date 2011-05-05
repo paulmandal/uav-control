@@ -1,11 +1,12 @@
 
 /* joystick2ppm - Paul Mandal (paul.mandal@gmail.com)
- * 2.0 - Recieves encoded servo messages from joystick app on GCS
+ * 3.0 - Recieves encoded servo messages from joystick app on GCS
  *     - Updates PPM pulses at 100Hz
  *     - Produces PPM frame every 20ms
  *     - Relays non-servo USART messages to second USART
  *     - Relays second USART (PPZ) messages to USART / GCS
  *     - Uses timers and cool stuff like that
+ *     - Has pin mapping for joystick buttons
  * 
  * Thanks to the Arduino community, everyone on the Sanguino team, and everyone involved in science and maths and them things.
  * And fanks to my friend Liz for showing me that science ain't just for nerdy blokes with pocket protectas and spectacles, but can also be quite a laugh.
@@ -109,9 +110,9 @@ messageState dbgMsg;  // Message struct for outgoing debug messages
 #endif
 
 #ifdef __AVR_ATmega644P__
-int buttonPinMap[BUTTON_COUNT] = {1, 2, 3, 4, 5, -1, -1, 6, 7, 12, 14};
+byte buttonPinMap[BUTTON_COUNT] = {1, 2, 3, 4, 5, -1, -1, 6, 7, 12, 14};
 #else
-int buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, -1, -1, -1, 7, 8, 10, A0};
+byte buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, -1, -1, -1, 7, 8, 10, A0};
 #endif
 
 int commandsSinceLastAck = 0;
