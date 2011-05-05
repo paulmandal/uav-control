@@ -111,7 +111,7 @@ messageState dbgMsg;  // Message struct for outgoing debug messages
 #ifdef __AVR_ATmega644P__
 int buttonPinMap[BUTTON_COUNT] = {1, 2, 3, 4, 5, -1, -1, 6, 7, 12, 14};
 #else
-int buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, -1, -1, 6, 7, 8, 10, A0};
+int buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, -1, -1, -1, 7, 8, 10, A0};
 #endif
 
 int commandsSinceLastAck = 0;
@@ -692,6 +692,8 @@ void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
   
           cli(); // Disable interrupts while this is being set
           pulses[(index * 2) + 1] = mappedPulse; // Store new pulse width
+          // DEBUG
+          //pulses[(index * 2) + 1] = 2000;
           sei(); // Re-enable interrupts
           
         }
