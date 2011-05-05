@@ -66,10 +66,10 @@
 #define SERVO_COUNT 8       // # of servos
 #define BUTTON_COUNT 12     // # of buttons on controller
 
-#define PPM_MIN_PULSE 1000  // Min pulse length (1ms)
-#define PPM_MAX_PULSE 2000  // Max pulse length (2ms)
-#define PPM_HIGH_PULSE 200  // Delay between pulses (200us)
-#define PPM_FREQUENCY 20000 // Frequency of PPM frame (20ms)
+#define PPM_MIN_PULSE 2000  // Min pulse length (1ms)
+#define PPM_MAX_PULSE 4000  // Max pulse length (2ms)
+#define PPM_HIGH_PULSE 400  // Delay between pulses (200us)
+#define PPM_FREQUENCY 40000 // Frequency of PPM frame (20ms)
 #define PPM_PULSES ((SERVO_COUNT * 2) + 2)  // How many pulses are there in the whole PPM (One 220us HIGH per servo, then 1ms-2ms LOW for servo pos, then 220us HIGH for pulse, then PPM_SYNC_PULSE LOW)
 #define PPM_SYNC_PULSE (PPM_FREQUENCY - (SERVO_COUNT * (((PPM_MAX_PULSE + PPM_MIN_PULSE) / 2) + PPM_HIGH_PULSE))) // Duration of sync pulse
 
@@ -113,7 +113,7 @@ messageState dbgMsg;  // Message struct for outgoing debug messages
 #ifdef ATMEGA644P
 int buttonPinMap[BUTTON_COUNT] = {1, 2, 3, 4, 5, -1, -1, 6, 7, 12, 14};
 #else
-int buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, 6, -1, -1, 7, 8, 10, A0};
+int buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, -1, -1, 6, 7, 8, 10, A0};
 #endif
 
 int commandsSinceLastAck = 0;
@@ -676,7 +676,7 @@ void checkSignal() {
   
 			TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A               
 			TCCR1A = B01000011;                     // Fast PWM mode, will generate ISR() when it reaches OCR1A (pulse[0]), thus starting the PPM signal
-			TCCR1B = B00011010;                     // Fast PWM, 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into useconds (16MHz / 8 * 2 = 1MHz)        
+			TCCR1B = B00011010;                     // Fast PWM, 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into 1/2 useconds (16MHz / 8 = 2MHz)        
 			sei(); // Re-enable interrupts
     
 		}
