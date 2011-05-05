@@ -10,14 +10,14 @@
  * Thanks to the Arduino community, everyone on the Sanguino team, and everyone involved in science and maths and them things.
  * And fanks to my friend Liz for showing me that science ain't just for nerdy blokes with pocket protectas and spectacles, but can also be quite a laugh.
  *
- * For reference this is coded for the ATmega644P, it has these pins: 
+ * For reference this is coded for the __AVR_ATmega644P__, it has these pins: 
  * PWM: 3, 4, 12, 13, 14, 15
  * Digital I/O: 0, 1, 2, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23
  * USART: 8, 9, 10, 11
  * ADC: 24, 25, 26, 27, 28, 29 (I think?)
  *
  * There is an option to use this with an ATmega328P in a more limited capacity (e.g. for testing)
- * by commenting out the #define ATMEGA644P line below
+ * by commenting out the #define __AVR_ATmega644P__ line below
  */
 
 /* Including things */
@@ -25,8 +25,6 @@
 #include "joystickRC_structs.h"
 
 /* This is the defining moment of the file */
-
-//#define ATMEGA644P    // Define ATmega644P, otherwise default to ATmega328P code
 
 #define DEBUG_LEVEL 0   // 1 - Messaging debugging
                         // 2 - Servo / pin output
@@ -37,7 +35,7 @@
                         // 7 - Only start debug message
                         // 8 - Report bad checksums
 
-#ifdef ATMEGA644P
+#ifdef __AVR_ATmega644P__
 #define DEBUG_PIN1     4 // Pin for debug signaling
 #define STATUS_LED_PIN 0 // Status LED pin
 #define NAVLIGHT_PIN  18 // Navigation light pin  
@@ -103,14 +101,14 @@ boolean ppmON = false;
 int pulses[PPM_PULSES];        // PPM pulses
 
 messageState xbeeMsg;  // Message struct for messages from XBee line
-#ifdef ATMEGA644P
+#ifdef __AVR_ATmega644P__
 messageState ppzMsg;  // Message struct for messages from PPZ line
 #endif
 #if DEBUG_LEVEL > 0
 messageState dbgMsg;  // Message struct for outgoing debug messages
 #endif
 
-#ifdef ATMEGA644P
+#ifdef __AVR_ATmega644P__
 int buttonPinMap[BUTTON_COUNT] = {1, 2, 3, 4, 5, -1, -1, 6, 7, 12, 14};
 #else
 int buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, -1, -1, 6, 7, 8, 10, A0};
@@ -146,14 +144,14 @@ void setup() {
 	initOutputs();                      // Initialise outputs
 	initPPM();                          // Set default PPM pulses
 	initMessage(&xbeeMsg);              // Init our XBee message
-	#ifdef ATMEGA644P
+	#ifdef __AVR_ATmega644P__
 	initMessage(&ppzMsg);               // Init our PPZ message
 	ppzMsg.readBytes = MSG_HEADER_SIZE; // Leave room for header addition to PPZ message
 	#endif
 	initTimer();                        // Init our timer
 	Serial.begin(115200);               // Open XBee/GCS Serial
 	Serial.flush();
-	#ifdef ATMEGA644P
+	#ifdef __AVR_ATmega644P__
 	Serial1.begin(115200);              // Open PPZ Serial
 	Serial1.flush();
 	#endif
@@ -181,7 +179,7 @@ void loop() {
 	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessage functions should be run with a much higher frequency than the LED updates or checkSignal()
   
 		checkXBeeMessages(&xbeeMsg); // Check for incoming XBee messages
-		#ifdef ATMEGA644P
+		#ifdef __AVR_ATmega644P__
 		checkPPZMessages(&ppzMsg);   // Check for incoming PPZ messages
 		#endif
 
@@ -366,7 +364,7 @@ boolean checkXBeeMessages(messageState *msg) {
 
 /* checkPPZMessages() - Check for and handle any incoming PPZ messages */
 
-#ifdef ATMEGA644P
+#ifdef __AVR_ATmega644P__
 boolean checkPPZMessages(messageState *msg) {
 
 	unsigned char testByte = 0x00;
@@ -463,7 +461,7 @@ void processMessage(messageState *msg) {
 
 	} else if(msgType == MSG_TYPE_PPZ) { // Handle PPZ message
 	
-		#ifdef ATMEGA644P
+		#ifdef __AVR_ATmega644P__
 		writePPZMessage(msg);
 		#endif
 	
@@ -623,7 +621,7 @@ void checkSignal() {
       
 			TCCR1A = B10000000;                              // Set the pin to go low on compare match
 			TCCR1C = B10000000;                              // Force match, this will force the pin low
-			#ifdef ATMEGA644P
+			#ifdef __AVR_ATmega644P__
 			DDRD  &= B11011111;                              // Disable output on OC1A      
 			#else
 			DDRB  &= B11111101;                              // Disable output on OC1A
@@ -668,7 +666,7 @@ void checkSignal() {
 			OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
 			currentPulse = 1;                       // Set currentPulse to 1 since there will be no ISR() call to increment it
 
-			#ifdef ATMEGA644P
+			#ifdef __AVR_ATmega644P__
 			DDRD  |= B00100000;                     // Enable output on OC1A
 			#else
 			DDRB  |= B00000010;                     // Enable output on OC1A
@@ -771,7 +769,7 @@ void writeXBeeMessage(messageState *msg, unsigned char msgType) {
 
 /* Write a message back to the PPZ port */
 
-#ifdef ATMEGA644P
+#ifdef __AVR_ATmega644P__
 void writePPZMessage(messageState *msg) {
    
 	int x;
@@ -794,7 +792,7 @@ void writePPZMessage(messageState *msg) {
 void initTimer() {
   
 	cli();   
-	#ifdef ATMEGA644P
+	#ifdef __AVR_ATmega644P__
 	DDRD  &= B11011111; // Disable output on OC1A      
 	#else
 	DDRB  &= B11111101; // Disable output on OC1A
