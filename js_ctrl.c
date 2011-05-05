@@ -37,6 +37,7 @@ Adruino:
 #include <stdint.h>
 #include <termios.h>
 #include <time.h>
+#include <math.h>
 
 #include <linux/input.h>
 #include <linux/joystick.h>
@@ -119,6 +120,8 @@ Adruino:
 #define CONFIG_FILE "js_ctrl.rc"  // Config file name
 #define CONFIG_FILE_MIN_COUNT 8   // # of variables stored in config file 
 
+#define EFFECTS_COUNT 16
+
 /* Structures */
 
 typedef struct _jsState {  // Store the axis and button states
@@ -127,10 +130,12 @@ typedef struct _jsState {  // Store the axis and button states
 	int *axis;
 	char *button;
 	int prevLeftThrottle;
-	int prevRightThrottle;	
+	int prevRightThrottle;
+	int rumbleLevel;
+	time_t lastRumbleTime;	
 	unsigned char axes;
 	unsigned char buttons;
-	struct ff_effect effects[10];
+	struct ff_effect effects[EFFECTS_COUNT];
 } jsState;
 
 typedef struct _afState { // Store the translated (servo + buttons) states, globally accessible
@@ -187,7 +192,7 @@ void writePortMsg(int outputPort, char *portName, unsigned char *message, int me
 unsigned char generateChecksum(unsigned char *message, int length);
 int testChecksum(unsigned char *message, int length);
 void sendCtrlUpdate (int signum);
-int checkSignal(int commandsPerAck, jsState joystickState);
+int checkSignal(int commandsPerAck, jsState *joystickState);
 void printState(jsState joystickState);
 int map(int value, int inRangeLow, int inRangeHigh, int outRangeLow, int outRangeHigh);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
@@ -203,8 +208,6 @@ int xbeePort;          // XBee port FD
 int commandsSinceLastAck = 0; // Commands sent since last ACK
 int handShook = 0;            // Handshook?
 time_t lostSignalTime;        // Time signal was lost
-int rumbleLevel = 0;
-time_t lastRumbleTime;
 
 unsigned long totalMsgs = 0;
 
@@ -222,7 +225,6 @@ int main(int argc, char **argv)
 
 	startTime = time(NULL);
 	lostSignalTime = time(NULL);
-	lastRumbleTime = time(NULL);
 	jsState joystickState;     // Current joystick state
 	configValues configInfo;   // Configuration values
 	messageState xbeeMsg;	   // messageState for incoming XBee message
@@ -278,7 +280,7 @@ int main(int argc, char **argv)
 
 				checkXBeeMessages(xbeePort, &xbeeMsg); // Check for pending msg bytes
 				usleep(10); // Give 10usec for character to be removed from buffer by read()
-				checkSignal(configInfo.commandsPerAck, joystickState); // call checkSignal() to allow rumble
+				checkSignal(configInfo.commandsPerAck, &joystickState); // call checkSignal() to allow rumble
 
 			}
 
@@ -305,7 +307,7 @@ int main(int argc, char **argv)
 
 		}
 
-		checkSignal(configInfo.commandsPerAck, joystickState);  // Check if our signal is still good
+		checkSignal(configInfo.commandsPerAck, &joystickState);  // Check if our signal is still good
 	
 	}
 
@@ -425,6 +427,9 @@ int openJoystick(configValues configInfo, jsState *joystickState) {
 		perror("js_ctrl");  // Error opening port
 		return -1;
 	}
+
+	joystickState->rumbleLevel = 0;
+	joystickState->lastRumbleTime = time(NULL);
 
 	joystickState->port = fd;   // Store joystick Port file descriptor
 	joystickState->event = efd; // Store joystick Event file descriptor
@@ -639,13 +644,17 @@ void initAirframe() {
 void initRumble(jsState *joystickState) {
 
 	int x;
+	int strongMagnitude;
+	int weakMagnitude;
 	
-	for(x = 0 ; x < 5 ; x++) {
-	
+	for(x = 0 ; x < EFFECTS_COUNT ; x++) {
+		
+		strongMagnitude = x < 3 ? 0 : (0xffff / 12) * (x - 3);
+		weakMagnitude = (0xffff / 8) * (x + 1);
 		joystickState->effects[x].type = FF_RUMBLE;
 		joystickState->effects[x].id = -1;
-		joystickState->effects[x].u.rumble.strong_magnitude = 0x0000;
-		joystickState->effects[x].u.rumble.weak_magnitude = (0x2000 * (x + 1)) - 1;
+		joystickState->effects[x].u.rumble.strong_magnitude = strongMagnitude;
+		joystickState->effects[x].u.rumble.weak_magnitude = weakMagnitude > 0xffff ? 0xffff : weakMagnitude;
 		joystickState->effects[x].replay.length = 1000;
 		joystickState->effects[x].replay.delay = 0;
 		
@@ -653,16 +662,6 @@ void initRumble(jsState *joystickState) {
 			perror("Upload effects[x]");
 		}
 	
-		joystickState->effects[x + 5].type = FF_RUMBLE;
-		joystickState->effects[x + 5].id = -1;
-		joystickState->effects[x + 5].u.rumble.strong_magnitude = (0x2000 * (x + 1)) - 1;
-		joystickState->effects[x + 5].u.rumble.weak_magnitude = 0xffff;
-		joystickState->effects[x + 5].replay.length = 1000;
-		joystickState->effects[x + 5].replay.delay = 0;
-		
-		if (ioctl(joystickState->event, EVIOCSFF, &joystickState->effects[x + 5]) == -1) {
-			perror("Upload effects[x + 5]");
-		}			
 	}
 
 }
@@ -1008,7 +1007,6 @@ void processMessage(messageState *msg) {
 
 		handShook = 1;
 		commandsSinceLastAck = 0;
-		rumbleLevel = 0;
 		#if DEBUG_LEVEL == 3
 		printf("Got sync msg, CSLA: %3d/%3d\n", commandsSinceLastAck, debugCommandsPerAck);
 		#endif
@@ -1233,11 +1231,17 @@ void sendCtrlUpdate(int signum) {
 
 /* checkSignal() - Check whether the signal is good, if not RUMBLE!! */
 
-int checkSignal(int commandsPerAck, jsState joystickState) {
+int checkSignal(int commandsPerAck, jsState *joystickState) {
 
 	struct input_event play; // input_event control to play and stop effects
 
 	if(handShook) { 
+	
+		if(joystickState->rumbleLevel == EFFECTS_COUNT - 1) {
+		
+			joystickState->rumbleLevel = 0;
+		
+		}
 	
 		if(commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
@@ -1259,31 +1263,30 @@ int checkSignal(int commandsPerAck, jsState joystickState) {
 
 		time_t currentTime = time(NULL); // get current time
 		double signalTimeDiff = difftime(currentTime, lostSignalTime);
-		double rumbleTimeDiff = difftime(currentTime, lastRumbleTime);
+		double rumbleTimeDiff = difftime(currentTime, joystickState->lastRumbleTime);
 		
-		if(signalTimeDiff > 0 && rumbleTimeDiff > 0.5 && rumbleLevel < 9) {  // Small rumble
+		if(signalTimeDiff > 0 && rumbleTimeDiff > 0.5 && joystickState->rumbleLevel < (EFFECTS_COUNT - 1)) {  // Small rumble
 	
-			lastRumbleTime = currentTime;
+			joystickState->lastRumbleTime = currentTime;
 			
 			play.type = EV_FF;
-			play.code = joystickState.effects[rumbleLevel].id;
+			play.code = joystickState->effects[joystickState->rumbleLevel].id;
 			play.value = 1;
-
-			if (write(joystickState.event, (const void*) &play, sizeof(play)) == -1) {
+			if (write(joystickState->event, (const void*) &play, sizeof(play)) == -1) {
 				perror("Play effect");
 				exit(1);
 			}
-			rumbleLevel++;
+			joystickState->rumbleLevel++;
 			return 0;
 	
-		} else if(signalTimeDiff > 0 && rumbleTimeDiff > 0.5 && rumbleLevel == 9) {
+		} else if(signalTimeDiff > 0 && rumbleTimeDiff > 0.5 && joystickState->rumbleLevel == (EFFECTS_COUNT - 1)) {
 	
-			lastRumbleTime = currentTime;	
+			joystickState->lastRumbleTime = currentTime;	
 			play.type = EV_FF;
-			play.code = joystickState.effects[rumbleLevel].id;
+			play.code = joystickState->effects[joystickState->rumbleLevel].id;
 			play.value = 1;
 
-			if (write(joystickState.event, (const void*) &play, sizeof(play)) == -1) {
+			if (write(joystickState->event, (const void*) &play, sizeof(play)) == -1) {
 				perror("Play effect");
 				exit(1);
 			}		
