@@ -10,14 +10,14 @@
  * Thanks to the Arduino community, everyone on the Sanguino team, and everyone involved in science and maths and them things.
  * And fanks to my friend Liz for showing me that science ain't just for nerdy blokes with pocket protectas and spectacles, but can also be quite a laugh.
  *
- * For reference this is coded for the __AVR_ATmega644P__, it has these pins: 
+ * For reference this is coded for the ATmega644P, it has these pins: 
  * PWM: 3, 4, 12, 13, 14, 15
  * Digital I/O: 0, 1, 2, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23
  * USART: 8, 9, 10, 11
  * ADC: 24, 25, 26, 27, 28, 29 (I think?)
  *
  * There is an option to use this with an ATmega328P in a more limited capacity (e.g. for testing)
- * by commenting out the #define __AVR_ATmega644P__ line below
+ * by commenting out the ATmega644P line below
  */
 
 /* Including things */
