@@ -55,9 +55,9 @@ Adruino:
 			      // Debug level - 4 - Time incoming messages
 			      // Debug level - 5 - Bad checksum reports
 
-#define VERSION_MAJOR 2       // Version information, Major #
-#define VERSION_MINOR 9       // Minor #
-#define VERSION_MOD   9       // Mod #
+#define VERSION_MAJOR 3       // Version information, Major #
+#define VERSION_MINOR 0       // Minor #
+#define VERSION_MOD   1       // Mod #
 #define VERSION_TAG   "DBG"   // Tag
 
 #define MSG_BEGIN     0xFF    // Begin of control message indicator byte
@@ -671,7 +671,11 @@ void initRumble(jsState *joystickState) {
 void translateJStoAF(jsState joystickState) {
 
 	int x;
-	if(joystickState.axis[ROLL] > 0) {
+	airframeState.servos[SRV_LEFTWING] = map(joystickState.axis[ROLL], 0, 32767, 0, 180);
+	airframeState.servos[SRV_RIGHTWING] = map(joystickState.axis[YAW], 0, 32767, 0, 180);
+	airframeState.servos[SRV_L_ELEVRON] = map(joystickState.axis[PITCH], 0, 32767, 0, 180);
+	airframeState.servos[SRV_R_ELEVRON] = map(joystickState.axis[THROTTLE], 0, 32767, 0, 180);
+	/*if(joystickState.axis[ROLL] > 0) {
 
 		if(joystickState.axis[ROLL] < (32767 / 2)) {
 
@@ -731,7 +735,7 @@ void translateJStoAF(jsState joystickState) {
 	airframeState.servos[SRV_ESC_RIGHT] = throttle_esc;
 	
 	airframeState.servos[SRV_CAM_PAN] = map(joystickState.axis[CAM_PAN], -32767, 32767, 0, 180);
-	airframeState.servos[SRV_CAM_TILT] = map(joystickState.axis[CAM_TILT], -32767, 32767, 0, 180);
+	airframeState.servos[SRV_CAM_TILT] = map(joystickState.axis[CAM_TILT], -32767, 32767, 0, 180);*/
 
 	for(x = 0 ; x < BUTTON_COUNT ; x++) {
 
