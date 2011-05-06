@@ -46,6 +46,10 @@
 #define NAVLIGHT_PIN   11 // Navigation light pin  
 #endif
 
+#define NAV_LIGHT    1
+#define STATUS_LIGHT 0
+#define FLASHING_LIGHTS 2
+
 #define VERSION_MAJOR 3     // Major version #
 #define VERSION_MINOR 0     // Minor #
 #define VERSION_MOD   1     // Mod #
@@ -88,14 +92,7 @@ unsigned int buttons[BUTTON_COUNT];      // store button states
 boolean lostSignal = true;        // lostSignal state
 unsigned long lastMsgTime = -1UL * LOST_MSG_THRESHOLD; // Time of last legit message, -100 initially so the PPM won't turn on until we get a real message
 
-unsigned int navlightInterval = NAVLIGHT_INTERVAL; // Interval for navigation lights
-unsigned long navlightLastTime = 0;      // Navigation light last 
-boolean navlightState = false;           // Navigation light LED state
-boolean navlightEnabled = false;         // Enable/disable navigation lights
-
-unsigned long lastStatusLEDTime = 0;     // Time of last status LED change
-unsigned int statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Current status LED toggle interval
-boolean statusLEDState = false;          // Status LED state
+ledBlinker lights[FLASHING_LIGHTS];  // blinking lights state
 
 byte currentPulse = 0;        // The pulse being sent
 boolean ppmON = false;
@@ -174,8 +171,7 @@ void setup() {
 void loop() {
 
 	int x;
-	updateStatusLED();        // Check if we need to toggle the status LED
-	updateNavigationLights(); // Update Navigation lights
+	updateLights();        // Check if we need to update any lights
 
 	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessage functions should be run with a much higher frequency than the LED updates or checkSignal()
   
@@ -256,9 +252,24 @@ void initOutputs() {
   		}
   	
   	}
-  	
-	pinMode(STATUS_LED_PIN, OUTPUT); // Status LED Pin
-	pinMode(NAVLIGHT_PIN, OUTPUT);   // Navlight LED(s) Pin
+  
+        lights[NAV_LIGHT].pin = NAVLIGHT_PIN;
+        lights[NAV_LIGHT].state = false;
+        lights[NAV_LIGHT].enabled = false;        
+        lights[NAV_LIGHT].lastChanged = 0;
+        lights[NAV_LIGHT].interval = NAVLIGHT_INTERVAL;
+        
+        lights[STATUS_LIGHT].pin = STATUS_LED_PIN;
+        lights[STATUS_LIGHT].state = false;
+        lights[STATUS_LIGHT].enabled = true;
+        lights[STATUS_LIGHT].lastChanged = 0;
+        lights[STATUS_LIGHT].interval = STATUS_INTERVAL_SIGNAL_LOST;
+        
+        for(x = 0 ; x < FLASHING_LIGHTS ; x++) {
+  
+	    pinMode(lights[x].pin, OUTPUT); // Mark pin as output
+
+        }
   
 }
 
@@ -561,47 +572,47 @@ void sendAck() {
 	}
         ackMsg[msgSize - 1] = generateChecksum(ackMsg, msgSize - 1); // Store our message checksum
 	Serial.write(ackMsg, msgSize);     // Send the sync ACK
-        Serial.flush();                          // Flush the serial buffer since it may be full of garbage
+        Serial.flush();                         // Flush the serial buffer since it may be full of garbage
         commandsSinceLastAck = 0;               // Set commandsSinceLastAck to 0
 
 }
 
-/* updateStatusLED() - Update status LED based on things */
+/* updateLights() - Update lights based on things */
 
-void updateStatusLED() {
+void updateLights() {
 
-	unsigned long currentTime = millis(); // get current time
-	if(currentTime - lastStatusLEDTime > statusLEDInterval) {
-
-		lastStatusLEDTime = currentTime;              // If more time than statusLEDInterval has passed, replace lastStatusLEDTime with currentTime
-		statusLEDState = !statusLEDState;             // Flip statusLEDState
-		digitalWrite(STATUS_LED_PIN, statusLEDState); // Display status LED
-
-	}
-
-}
-
-/* updateNavigationLights() - Update status LED based on things */
-
-void updateNavigationLights() {
-
-	if(navlightEnabled) {
-    
-		unsigned long currentTime = millis(); // get current time
-		if(currentTime - navlightLastTime > navlightInterval) {
-
-			navlightLastTime = currentTime;              // If more time than navlightInterval has passed, replace navlightLastTime with currentTime
-			navlightState = !navlightState;              // Flip navlightState
-			digitalWrite(NAVLIGHT_PIN, navlightState);   // Display navlight LED
-
-		}
-  
-	} else {
-    
-		digitalWrite(NAVLIGHT_PIN, false);  // Navlights are turned off
-    
-	}
-
+        int x;
+        
+        for(x = 0 ; x < FLASHING_LIGHTS ; x++) {
+          
+          if(lights[x].enabled) {
+            
+            if(lights[x].interval > 0) {
+              
+              
+              unsigned long currentTime = millis(); // get current time
+              if(currentTime - lights[x].lastChanged > lights[x].interval) {
+                
+                digitalWrite(lights[x].pin, lights[x].state);
+                lights[x].state = !lights[x].state;
+                lights[x].lastChanged = currentTime;
+              
+              }
+              
+            } else {
+              
+              digitalWrite(lights[x].pin, HIGH);
+              
+            }
+            
+          } else {
+            
+            digitalWrite(lights[x].pin, LOW);
+            
+          }
+          
+        }
+	
 }
 
 /* checkSignal() - Check the signal state and make necessary updates */
@@ -635,7 +646,7 @@ void checkSignal() {
 			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----commandsSinceLastAck: %d currentTime: %lu lastMsgTime: %lu diff: %lu > %lu-", commandsSinceLastAck, currentTime, lastMsgTime, (currentTime - lastMsgTime), LOST_MSG_THRESHOLD); // Build debug message
 			writeXBeeMessage(&dbgMsg, MSG_TYPE_DBG);                                               // Write debug message
 			#endif
-			statusLEDInterval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
+			lights[STATUS_LIGHT].interval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
 			#if DEBUG_LEVEL == 3 || DEBUG_LEVEL == 4
 			digitalWrite(DEBUG_PIN1, HIGH);
 			#endif
@@ -650,7 +661,7 @@ void checkSignal() {
 			cli();  // This shouldn't get interrupted since PPM is off but just to be safe..
 
 			ppmON = true;                           // turn on PPM status flag
-			statusLEDInterval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+			lights[STATUS_LIGHT].interval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
 
 			#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
 			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Starting PPM, lostSignal = false-"); // Build debug message
@@ -717,11 +728,11 @@ void handleControlUpdate() {
 	}
 	if(buttons[4] > 0) { // Handle navlight button
     
-		navlightEnabled = true;  // enable navlight if button 5 is on
+		lights[NAV_LIGHT].enabled = true;  // enable navlight if button 5 is on
     
 	} else {
     
-		navlightEnabled = false; // otherwise disable it
+		lights[NAV_LIGHT].enabled = false; // otherwise disable it
     
 	}
   	for(x = 0 ; x < BUTTON_COUNT ; x++) {

@@ -7,3 +7,13 @@ struct messageState {
 	int length;
 
 };
+
+struct ledBlinker {
+  
+  unsigned int interval;
+  int pin;
+  int state;
+  int enabled;
+  unsigned long lastChanged;
+  
+};
