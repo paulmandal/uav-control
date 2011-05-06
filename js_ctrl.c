@@ -4,23 +4,10 @@
  * Sends JS state every 20ms
  * Receives commands from PPZ, relays to UAV
  * Receives telemetry from UAV, relays to PPZ
+ * Rumble on weak RSSI or signal loss
  *
  * Special thanks to Vojtech Pavlik <vojtech@ucw.cz>, I adopted much of the joystick code from jstest.c
  * Special thanks to Johann Deneux <deneux@ifrance.com>, I learned the Force Feedback methods from fftest.c
-*/
-
-/*
-
-TODO:
-
-- Force feedback on RSSI weak/loss - supported Sine Wave, Strong Rumble, Weak Rumble
-
-Adruino:
-
-- Handle config updates via msg
-- Handle digital pins/buttons
-- Handle 3-way switch (or servo it?)
-
 */
 
 /* Includes */
@@ -138,6 +125,7 @@ typedef struct _jsState {  // Store the axis and button states
 	unsigned char axes;
 	unsigned char buttons;
 	struct ff_effect effects[EFFECTS_COUNT];
+	
 } jsState;
 
 typedef struct _afState { // Store the translated (servo + buttons) states, globally accessible
@@ -188,7 +176,7 @@ typedef struct _signalState {
 	int commandsSinceLastAck; // Commands sent since last ACK
 	int handShook;            // Handshook?
 	time_t lostSignalTime;    // Time signal was lost
-	unsigned long totalMsgs = 0;
+	unsigned long totalMsgs;
 
 } signalState;
 
@@ -198,6 +186,7 @@ int openPort(char *portName, char *use);
 int openPty(ptyInfo *pty, char *use);
 int openJoystick(configValues configInfo, jsState *joystickState);
 int readConfig(configValues *configInfo);
+void initGlobals();
 void initTimer(configValues configInfo);
 void initAirframe();
 void initRumble(jsState *joystickState);
@@ -222,7 +211,7 @@ char *fgetsNoNewline(char *s, int n, FILE *stream);
 
 afState airframeState; // Current airframe state
 portState ports;
-signalState signal;
+signalState signalInfo;
 
 #if DEBUG_LEVEL > 0
 int debugCommandsPerAck = 0;
@@ -281,7 +270,7 @@ int main(int argc, char **argv)
 
 	while(1) {
 
-		if(!signal.handShook) {
+		if(!signalInfo.handShook) {
 
 			#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
 			printf("Handshaking..");
@@ -290,7 +279,7 @@ int main(int argc, char **argv)
 			printf("\n");
 			#endif
 
-			while(!signal.handShook) {  // Handshaking loop
+			while(!signalInfo.handShook) {  // Handshaking loop
 
 				checkXBeeMessages(ports.xbeePort, &xbeeMsg); // Check for pending msg bytes
 				usleep(10); // Give 10usec for character to be removed from buffer by read()
@@ -337,9 +326,10 @@ int main(int argc, char **argv)
 
 void initGlobals() {
 
-	signal.commandsSinceLastAck = 0;
-	signal.handShook = 0;
-	signal.lostSignalTime = time(NULL);
+	signalInfo.commandsSinceLastAck = 0;
+	signalInfo.handShook = 0;
+	signalInfo.totalMsgs = 0;
+	signalInfo.lostSignalTime = time(NULL);
 	
 }
 
@@ -635,9 +625,9 @@ void initTimer(configValues configInfo) {
 	struct itimerval timer;
 	
 	printf("Setting up timer..\n");
-	memset (&sa, 0, sizeof (sa));                       // Make signal object
-	sa.sa_handler = &sendCtrlUpdate;                    // Set signal function handler in 'sa'
-	sigaction (SIGALRM, &sa, NULL);                     // Set SIGALRM signal handler
+	memset(&sa, 0, sizeof (sa));                       // Make signal object
+	sa.sa_handler = &sendCtrlUpdate;                   // Set signal function handler in 'sa'
+	sigaction(SIGALRM, &sa, NULL);                     // Set SIGALRM signal handler
 
 	timer.it_value.tv_sec = 0;
 	timer.it_value.tv_usec = configInfo.ppmInterval;    // Set timer interval to 20000usec (20ms)
@@ -695,10 +685,10 @@ void initRumble(jsState *joystickState) {
 void translateJStoAF(jsState joystickState) {
 
 	int x;
-	airframeState.servos[SRV_LEFTWING] = map(joystickState.axis[ROLL], 0, 32767, 0, 180);
-	airframeState.servos[SRV_RIGHTWING] = map(joystickState.axis[YAW], 0, 32767, 0, 180);
-	airframeState.servos[SRV_L_ELEVRON] = map(joystickState.axis[PITCH], 0, 32767, 0, 180);
-	airframeState.servos[SRV_R_ELEVRON] = map(joystickState.axis[THROTTLE], 0, 32767, 0, 180);
+	airframeState.servos[SRV_LEFTWING] = map(joystickState.axis[ROLL], -32767, 32767, 0, 180);
+	airframeState.servos[SRV_RIGHTWING] = map(joystickState.axis[YAW], -32767, 32767, 0, 180);
+	airframeState.servos[SRV_L_ELEVRON] = map(joystickState.axis[PITCH], -32767, 32767, 0, 180);
+	airframeState.servos[SRV_R_ELEVRON] = map(joystickState.axis[THROTTLE], -32767, 32767, 0, 180);
 	/*if(joystickState.axis[ROLL] > 0) {
 
 		if(joystickState.axis[ROLL] < (32767 / 2)) {
@@ -912,7 +902,7 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 		if(read(msgPort, &testByte, sizeof(char)) == sizeof(char)) {  // We read a byte, so process it
 
 			#if DEBUG_LEVEL == 3
-			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x\n", msg->readBytes, msg->length, signal.handShook, signal.commandsSinceLastAck, testByte); // Print out each received byte	
+			printf("BYTE[%3d/%3d - HS:%d - CSLA: %3d]: %2x\n", msg->readBytes, msg->length, signalInfo.handShook, signalInfo.commandsSinceLastAck, testByte); // Print out each received byte	
 			#endif		
 
 			msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
@@ -1004,10 +994,10 @@ void processMessage(messageState *msg) {
 
 	if(msgType == MSG_TYPE_SYNC) {  // Handle the message, since it got past checksum it has to be legit
 
-		signal.handShook = 1;
-		signal.commandsSinceLastAck = 0;
+		signalInfo.handShook = 1;
+		signalInfo.commandsSinceLastAck = 0;
 		#if DEBUG_LEVEL == 3
-		printf("Got sync msg, CSLA: %3d/%3d\n", signal.commandsSinceLastAck, debugCommandsPerAck);
+		printf("Got sync msg, CSLA: %3d/%3d\n", signalInfo.commandsSinceLastAck, debugCommandsPerAck);
 		#endif
 
 	} else if(msgType == MSG_TYPE_CTRL) { // We shouldn't get this from the Arduino
@@ -1163,7 +1153,7 @@ void sendCtrlUpdate(int signum) {
 	
 	int x;
 
-	if(signal.handShook) {	// We're synced up, send a control update
+	if(signalInfo.handShook) {	// We're synced up, send a control update
 
 		int msgSize = MSG_HEADER_SIZE + SERVO_COUNT + 3 + 1; // MSG_HEADER_SIZE + 1 byte per servo + 3 bytes buttons + 1 checksum byte
 		int buttonOffset = MSG_HEADER_SIZE + SERVO_COUNT;
@@ -1194,8 +1184,8 @@ void sendCtrlUpdate(int signum) {
 
 		writePortMsg(ports.xbeePort, "XBee", ctrlMsg, msgSize); // Write out message to XBee
 		free(ctrlMsg); // Deallocate memory for ctrlMsg	
-		signal.totalMsgs++;
-		signal.commandsSinceLastAck++;
+		signalInfo.totalMsgs++;
+		signalInfo.commandsSinceLastAck++;
 	
 	} else {  // We aren't synced up, send sync msg
 
@@ -1234,7 +1224,7 @@ int checkSignal(int commandsPerAck, jsState *joystickState) {
 
 	struct input_event play; // input_event control to play and stop effects
 
-	if(signal.handShook) { 
+	if(signalInfo.handShook) { 
 	
 		if(joystickState->rumbleLevel == EFFECTS_COUNT - 1) {
 		
@@ -1242,17 +1232,17 @@ int checkSignal(int commandsPerAck, jsState *joystickState) {
 		
 		}
 	
-		if(signal.commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
+		if(signalInfo.commandsSinceLastAck > commandsPerAck) {  // Looks like we've lost our signal (2s and 100+ cmds since last ACK)
 
-			signal.handShook = 0;  // Turn off handshake so we can resync
-			signal.lostSignalTime = time(NULL); // Store time we lost the signal
+			signalInfo.handShook = 0;  // Turn off handshake so we can resync
+			signalInfo.lostSignalTime = time(NULL); // Store time we lost the signal
 			#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
 			printf("Lost signal!  Attempting to resync.\n");
 			#endif
 			#if DEBUG_LEVEL == 1
 			time_t currentTime = time(NULL);
 			time_t diff = currentTime - startTime;
-			printf("CSLA: %3d Total msgs: %lu Running: %lds\n", signal.commandsSinceLastAck, signal.totalMsgs, diff);
+			printf("CSLA: %3d Total msgs: %lu Running: %lds\n", signalInfo.commandsSinceLastAck, signalInfo.totalMsgs, diff);
 			#endif
 			return 0;
 
@@ -1261,7 +1251,7 @@ int checkSignal(int commandsPerAck, jsState *joystickState) {
 	} else {
 
 		time_t currentTime = time(NULL); // get current time
-		double signalTimeDiff = difftime(currentTime, signal.lostSignalTime);
+		double signalTimeDiff = difftime(currentTime, signalInfo.lostSignalTime);
 		double rumbleTimeDiff = difftime(currentTime, joystickState->lastRumbleTime);
 		
 		if(signalTimeDiff > 0 && rumbleTimeDiff > 0.5 && joystickState->rumbleLevel < (EFFECTS_COUNT - 1)) {  // Small rumble
