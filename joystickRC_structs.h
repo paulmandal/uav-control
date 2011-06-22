@@ -10,10 +10,9 @@ struct messageState {
 
 struct ledBlinker {
   
-  unsigned int interval;
+  unsigned int interval; // interval == 0 is always on, interval < 0 is always off, interval > 0 is an interval
   int pin;
   int state;
-  int enabled;
   unsigned long lastChanged;
   
 };

@@ -18,7 +18,6 @@
  * ADC: 24, 25, 26, 27, 28, 29 (I think?)
  *
  * There is an option to use this with an ATmega328P in a more limited capacity (e.g. for testing)
- * by commenting out the ATmega644P line below
  */
 
 /* Including things */
@@ -79,7 +78,7 @@
 #define STATUS_INTERVAL_SIGNAL_LOST 100 // Toggle every 100ms
 #define STATUS_INTERVAL_OK 1000         // Toggle every 1s
 
-#define NAVLIGHT_INTERVAL 1000          // Toggle every 1s
+#define NAV_LIGHT_INTERVAL 1000          // Toggle every 1s
 
 #define ACK_MIN_SIZE 10
 #define ACK_MAX_SIZE 30
@@ -255,13 +254,11 @@ void initOutputs() {
   
         lights[NAV_LIGHT].pin = NAVLIGHT_PIN;
         lights[NAV_LIGHT].state = false;
-        lights[NAV_LIGHT].enabled = false;        
         lights[NAV_LIGHT].lastChanged = 0;
-        lights[NAV_LIGHT].interval = NAVLIGHT_INTERVAL;
+        lights[NAV_LIGHT].interval = -1;
         
         lights[STATUS_LIGHT].pin = STATUS_LED_PIN;
         lights[STATUS_LIGHT].state = false;
-        lights[STATUS_LIGHT].enabled = true;
         lights[STATUS_LIGHT].lastChanged = 0;
         lights[STATUS_LIGHT].interval = STATUS_INTERVAL_SIGNAL_LOST;
         
@@ -581,35 +578,31 @@ void sendAck() {
 
 void updateLights() {
 
-        int x;
+	int x;
         
-        for(x = 0 ; x < FLASHING_LIGHTS ; x++) {
+	for(x = 0 ; x < FLASHING_LIGHTS ; x++) {
           
-          if(lights[x].enabled) {
+		if(lights[x].interval > 0) {
             
-            if(lights[x].interval > 0) {
-              
-              
-              unsigned long currentTime = millis(); // get current time
-              if(currentTime - lights[x].lastChanged > lights[x].interval) {
+
+			unsigned long currentTime = millis(); // get current time
+			if(currentTime - lights[x].lastChanged > lights[x].interval) {
                 
-                digitalWrite(lights[x].pin, lights[x].state);
-                lights[x].state = !lights[x].state;
-                lights[x].lastChanged = currentTime;
+                		digitalWrite(lights[x].pin, lights[x].state);
+                		lights[x].state = !lights[x].state;
+                		lights[x].lastChanged = currentTime;
               
-              }
+              		}
+
+		} else if(lights[x].interval == 0) {
+                            
+			digitalWrite(lights[x].pin, HIGH);
               
-            } else {
-              
-              digitalWrite(lights[x].pin, HIGH);
-              
-            }
+     		} else {
             
-          } else {
+			digitalWrite(lights[x].pin, LOW);
             
-            digitalWrite(lights[x].pin, LOW);
-            
-          }
+          	}
           
         }
 	
@@ -728,11 +721,11 @@ void handleControlUpdate() {
 	}
 	if(buttons[4] > 0) { // Handle navlight button
     
-		lights[NAV_LIGHT].enabled = true;  // enable navlight if button 5 is on
+		lights[NAV_LIGHT].interval = NAV_LIGHT_INTERVAL;  // enable navlight if button 5 is on
     
 	} else {
     
-		lights[NAV_LIGHT].enabled = false; // otherwise disable it
+		lights[NAV_LIGHT].interval = -1; // otherwise disable it
     
 	}
   	for(x = 0 ; x < BUTTON_COUNT ; x++) {
