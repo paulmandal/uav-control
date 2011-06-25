@@ -63,12 +63,12 @@
 #define MTYPE_PING_SZ            4    // Message types: Ping
 #define MTYPE_PING_REPLY_SZ      4    // Ping reply
 #define MTYPE_HEARTBEAT_SZ       3    // Heartbeat (no control update)
-#define MTYPE_FULL_UPDATE_SZ    21    // Full update
+#define MTYPE_FULL_UPDATE_SZ    22    // Full update
 #define MTYPE_SINGLE_SERVO_SZ    5    // Single servo
 #define MTYPE_ALL_SERVOS_SZ     19    // Update all servos
 #define MTYPE_BUTTON_UPDATE_SZ   6    // Buttons update
 
-#define MAX_CTRL_MSG_SZ         18    // Maximum data size for a control update msg
+#define MAX_CTRL_MSG_SZ         19    // Maximum data size for a control update msg
 
 #define MSG_BUFFER_SIZE     256      // Message buffer size in bytes
 #define PPZ_MSG_HEADER_SIZE   3      // PPZ msg header size in bytes
@@ -194,7 +194,8 @@ void writePortMsg(int outputPort, char *portName, unsigned char *message, int me
 unsigned char generateChecksum(unsigned char *message, int length);
 int testChecksum(unsigned char *message, int length);
 void sendCtrlUpdate (int signum);
-int checkSignal(jsState *joystickState);
+int checkSignal(configValues configInfo, jsState *joystickState);
+void sendAck(messageState *msg);
 void printState(jsState joystickState);
 int map(int value, int inRangeLow, int inRangeHigh, int outRangeLow, int outRangeHigh);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
@@ -278,7 +279,7 @@ int main(int argc, char **argv)
 
 				checkXBeeMessages(ports.xbeePort, &xbeeMsg); // Check for pending msg bytes
 				usleep(10); // Give 10usec for character to be removed from buffer by read()
-				checkSignal(&joystickState); // call checkSignal() to allow rumble
+				checkSignal(configInfo, &joystickState); // call checkSignal() to allow rumble
 
 			}
 
@@ -305,7 +306,7 @@ int main(int argc, char **argv)
 
 		}
 
-		checkSignal(&joystickState);  // Check if our signal is still good
+		checkSignal(configInfo, &joystickState);  // Check if our signal is still good
 	
 	}
 
@@ -589,7 +590,7 @@ int readConfig(configValues *configInfo) {
 	printf("              Joystick Port: %s\n", configInfo->joystickPortFile);
 	printf(" Joystick Discard Threshold: %7d\n", configInfo->jsDiscardUnder);
 	printf("               PPM Interval: %7dusec\n", configInfo->ppmInterval);
-	printf("          Timeout Threshold: %7fsec\n", configInfo->timeoutThreshold);
+	printf("          Timeout Threshold: %7fsec\n", (double)configInfo->timeoutThreshold);
 	printf("         Button State Count: \n\n");
 	
 	for(x = 0 ; x < buttonCount ; x++) {
@@ -1099,7 +1100,6 @@ void processMessage(messageState *msg) {
 
 	unsigned char msgType = msg->messageBuffer[1];
 	int x;
-	time_t currentTime = time(NULL);
 
 	if(msgType == MTYPE_PING) { // We got a ping, send an ack
 
@@ -1282,7 +1282,7 @@ void sendCtrlUpdate(int signum) {
 
 		// Gather counts for each type of control that changed
 
-		for(x = 0 ; x < SERVOS_COUNT ; x++) {
+		for(x = 0 ; x < SERVO_COUNT ; x++) {
 
 			if(airframeState.servos_changed[x]) {
 
@@ -1296,12 +1296,12 @@ void sendCtrlUpdate(int signum) {
 
 		x = 0;
 
-		while(x < BUTTONS_COUNT) {
+		while(x < BUTTON_COUNT) {
 
 			if(airframeState.buttons_changed[x]) {
 
 				sendButtons = 1;
-				x = BUTTONS_COUNT;
+				x = BUTTON_COUNT;
 
 			}
 			x++;
@@ -1426,14 +1426,14 @@ void sendCtrlUpdate(int signum) {
 
 /* sendAck(message) - Send ack! */
 
-void sendAck(messageState msg) {
+void sendAck(messageState *msg) {
 
 	unsigned char pingReply[4];
 
 	pingReply[0] = MSG_BEGIN;
 	pingReply[1] = MTYPE_PING_REPLY;
-	pingReply[2] = msg.messageBuffer[2];
-	pingReply[3] = generateChecksum(pingReply, MTYPE_PING_REPLY_SZ); // Store our checksum as the last byte
+	pingReply[2] = msg->messageBuffer[2];
+	pingReply[3] = generateChecksum(pingReply, MTYPE_PING_REPLY_SZ - 1); // Store our checksum as the last byte
 
 	writePortMsg(ports.xbeePort, "XBee", pingReply, MTYPE_PING_REPLY_SZ);  // Write the handshake to the XBee port
 
