@@ -35,7 +35,7 @@
 
 /* Definitions */
 
-#define DEBUG_LEVEL 0	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 3	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Lost signal debug
 			      // Debug level - 2 - Debug joystick position info
 			      // Debug level - 3 - Debug incoming messages
@@ -43,8 +43,8 @@
 			      // Debug level - 5 - Bad checksum reports
 
 #define VERSION_MAJOR 3       // Version information, Major #
-#define VERSION_MINOR 0       // Minor #
-#define VERSION_MOD   1       // Mod #
+#define VERSION_MINOR 2       // Minor #
+#define VERSION_MOD   0       // Mod #
 #define VERSION_TAG   "DBG"   // Tag
 
 #define MSG_BEGIN            0xFF    // Begin of control message indicator byte
@@ -901,10 +901,6 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 
 		if(read(msgPort, &testByte, sizeof(char)) == sizeof(char)) {  // We read a byte, so process it
 
-			#if DEBUG_LEVEL == 3
-			printf("BYTE[%3d/%3d - HS:%d]: %2x\n", msg->readBytes, msg->length, signalInfo.handShook, testByte); // Print out each received byte	
-			#endif		
-
 			if(msg->readBytes == 0) { // Haven't got MSG_BEGIN yet, look for it
 
 				if(testByte == MSG_BEGIN) { // Beginning of a messge
@@ -912,12 +908,28 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 					msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
 					msg->readBytes++;			       // Increment readBytes
 
+					#if DEBUG_LEVEL == 3
+					printf("MSG: %2x ", testByte);
+					//printf("BYTE[%3d/%3d - HS:%d]: %2x\n", msg->readBytes, msg->length, signalInfo.handShook, testByte); // Print out each received byte	
+					#endif		
+
 				}
+				#if DEBUG_LEVEL == 3
+				else {
+
+					printf("%2x\n", testByte);
+
+				}
+				#endif
 
 			} else {
 
 				msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
 				msg->readBytes++;			       // Increment readBytes
+				#if DEBUG_LEVEL == 3
+				printf("%2x ", testByte);
+				//printf("BYTE[%3d/%3d - HS:%d]: %2x\n", msg->readBytes, msg->length, signalInfo.handShook, testByte); // Print out each received byte	
+				#endif	
 
 			}
 
@@ -931,7 +943,10 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 
 	} else { // Message is finished, process it
 
-		int x, y;	
+		int x, y;
+		#if DEBUG_LEVEL == 3
+		printf("\n");
+		#endif	
 
 		if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  
 
@@ -1048,7 +1063,7 @@ int getMessageLength(messageState *msg) {
 
 	if(msg->readBytes > 1) { // Do zero-parameter types first, if we can't find one, see if we have enough characters for one of the parametered types
 
-		if(MTYPE_HEARTBEAT) { // Do 3-char long messages first
+		if(msg->messageBuffer[1] == MTYPE_HEARTBEAT) { // Do 3-char long messages first
 
 			return MTYPE_HEARTBEAT_SZ;
 
@@ -1091,6 +1106,8 @@ int getMessageLength(messageState *msg) {
 		return -1; // Haven't read enough bytes yet
 
 	}
+
+	return -1;
 
 }
 
@@ -1160,14 +1177,18 @@ void processMessage(messageState *msg) {
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize) {
 
 	int msgWrote = 0;
-	#if DEBUG_LEVEL == 21
-	printf("WRITING[%2d]: ", messageSize);
-	for(x = 0 ; x < messageSize ; x++) {
+	#if DEBUG_LEVEL == 3
+	if(message[1] != MTYPE_HEARTBEAT) {
+
+		int x;
+		printf("WRITING[%2d]: ", messageSize);
+		for(x = 0 ; x < messageSize ; x++) {
 		
-		printf("%2x ", message[x]);
+			printf("%2x ", message[x]);
 	
+		}
+		printf("\n");
 	}
-	printf("\n");
 	#endif
 	msgWrote = write(outputPort, message, messageSize);  // write() and store written byte count in msgWrote
 	if(msgWrote != messageSize) { // If written byte count is not expected value
@@ -1289,6 +1310,7 @@ void sendCtrlUpdate(int signum) {
 				servoUpdates[servosChanged] = airframeState.servos[x];
 				servoUpdateIds[servosChanged] = x;
 				servosChanged++;
+				airframeState.servos_changed[x] = 0;
 
 			}
 
@@ -1301,6 +1323,7 @@ void sendCtrlUpdate(int signum) {
 			if(airframeState.buttons_changed[x]) {
 
 				sendButtons = 1;
+				airframeState.buttons_changed[x] = 0;
 				x = BUTTON_COUNT;
 
 			}
@@ -1326,7 +1349,7 @@ void sendCtrlUpdate(int signum) {
 
 		} else if(servosChanged > 1 && servosChanged < 8) { // Variable # of servos
 
-			msgSize = 3 + (2 * servosChanged); // msgSize = 3 for header, 2 bytes each servo (10-bit pos + 6-bit servo number)
+			msgSize = 4 + (2 * servosChanged); // msgSize = 3 for header, 2 bytes each servo (10-bit pos + 6-bit servo number)
 			msgType = MTYPE_VAR_SERVOS;
 			msgData[0] = servosChanged;   // Store the # of servos as the first value
 
@@ -1406,13 +1429,12 @@ void sendCtrlUpdate(int signum) {
 	} else {  // We aren't synced up, send ping request
 
 		unsigned char pingMsg[MTYPE_PING_SZ];
-		unsigned char msgData = rand() % 255; // Ping contains 1 byte that must be sent back as a valid ack
-		signalInfo.pingData = msgData;
+		signalInfo.pingData = rand() % 255; // Ping contains 1 byte that must be sent back as a valid ack
 
 		pingMsg[0] = MSG_BEGIN;
 		pingMsg[1] = MTYPE_PING;
-		pingMsg[2] = msgData;
-		pingMsg[3] = generateChecksum(pingMsg, MTYPE_PING_SZ); // Store our checksum as the last byte
+		pingMsg[2] = signalInfo.pingData;
+		pingMsg[3] = generateChecksum(pingMsg, MTYPE_PING_SZ - 1); // Store our checksum as the last byte
 
 		#if DEBUG_LEVEL == 0
 		printf(".");
