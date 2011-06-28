@@ -104,8 +104,10 @@ unsigned int servos[SERVO_COUNT];        // store servo states
 unsigned int buttons[BUTTON_COUNT];      // store button states
 
 boolean lostSignal = true;        // lostSignal state
-unsigned long lastMsgTime = -1UL * LOST_MSG_THRESHOLD; // Time of last legit message, -100 initially so the PPM won't turn on until we get a real message
-unsigned long lastMsgSentTime = 0UL;
+boolean handShook = false;
+unsigned char pingData;
+unsigned long lastMessageTime = -1UL * LOST_MSG_THRESHOLD; // Time of last legit message, -100 initially so the PPM won't turn on until we get a real message
+unsigned long lastMessageSentTime = 0UL;
 
 ledBlinker lights[FLASHING_LIGHTS];  // blinking lights state
 
@@ -182,7 +184,7 @@ void loop() {
 	
 	// send heartbeat if we need to
 
-	if(lastMsgSentTime - currentTime < HEARTBEAT_INTERVAL) {
+	if((lastMessageSentTime - currentTime) > HEARTBEAT_INTERVAL) {
 
 		sendHeartbeat();
 
@@ -285,12 +287,7 @@ boolean initMessage(messageState *msg) {
 	msg->readBytes = 0;
 	msg->length = -1; // Init message.length as header length size
 	if((msg->messageBuffer = (unsigned char*)calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
-	
-                for(x = 0 ; x < MSG_HEADER_SIZE ; x++) {
-                  
-                  msg->messageBuffer[x] = '\0';
-                  
-                }
+
 		return true; // calloc() worked
 	
 	} else {
@@ -352,7 +349,7 @@ boolean checkXBeeMessages(messageState *msg) {
 			processMessage(msg);
 			if(msg->messageBuffer[1] != MTYPE_PING) {
 
-				signalInfo.lastMessageTime = time(NULL); // Set last message time, except for from a ping
+				lastMessageTime = millis(); // Set last message time, except for from a ping
 
 			}
 
@@ -530,46 +527,68 @@ void processMessage(messageState *msg) {
 
 	} else if(msgType == MTYPE_PING_REPLY) {  // Handle the message, since it got past checksum it has to be legit
 
-		if(msg->messageBuffer[2] == signalInfo.pingData) { //  See if the payload matches the ping packet we sent out
+		if(msg->messageBuffer[2] == pingData) { //  See if the payload matches the ping packet we sent out
 		
-			signalInfo.handShook = 1;
+			handShook = true;
 
 		}
 
 	} else if(msgType == MTYPE_SINGLE_SERVO) {
+
+		int servoNum = 0;
+		int servoPos = 0;
+
+		servoNum = (msg->messageBuffer[2] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
+		servoPos = (msg->messageBuffer[2] & B00000011) << 8; // Binary: 0000 0011, strip out servo number, shift top 2 bits of servo pos over
+		servoPos = servoPos | msg->messageBuffer[3]; // Store last 8 bits of servo position
+		storePulse(servoNum, servoPos, 0, 180);
+		servos[servoNum] = servoPos;
+
 	} else if(msgType == MTYPE_VAR_SERVOS) {
+
+		int servoCount = 0;
+		int servoNum;
+		int servoPos;
+
+		servoCount = msg->messageBuffer[2];
+
+		for(x = 0 ; x < servoCount ; x++) {
+
+			servoNum = (msg->messageBuffer[(x * 2) + 3] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
+			servoPos = (msg->messageBuffer[(x * 2) + 3] & B00000011) << 8; // Binary: 0000 0011, strip out servo number, shift top 2 bits of servo pos over
+			servoPos = servoPos | msg->messageBuffer[(x * 2) + 4]; // Store last 8 bits of servo position
+			storePulse(servoNum, servoPos, 0, 180);
+			servos[servoNum] = servoPos;
+
+		}
+
 	} else if(msgType == MTYPE_ALL_SERVOS) {
+
+		int servoNum;
+		int servoPos;
+
+		for(x = 0 ; x < SERVO_COUNT ; x++) {
+
+			servoNum = (msg->messageBuffer[(x * 2) + 2] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
+			servoPos = (msg->messageBuffer[(x * 2) + 2] & B00000011) << 8; // Binary: 0000 0011, strip out servo number, shift top 2 bits of servo pos over
+			servoPos = servoPos | msg->messageBuffer[(x * 2) + 3]; // Store last 8 bits of servo position
+			storePulse(servoNum, servoPos, 0, 180);
+			servos[servoNum] = servoPos;
+
+		}
+
 	} else if(msgType == MTYPE_BUTTON_UPDATE) {
-	} else if(msgType == MSG_TYPE_CTRL) { // Handle updating the controls
 
- 		lastMsgTime = millis(); // Only command messages count for this
-        	lostSignal = false;     // Message was legit, update lostSignal and lastMsgTime
-		/* MSG structure - [BEGIN_MSG] [MSG_TYPE] [SERVOS] [BUTTONS] [CHECKSUM]
-	         * BEGIN_MSG - 1 byte  - 1 byte msg marker
-		 * MSG_TYPE  - 1 byte  - 1 byte msg type marker
-                 * MSG_LEN   - 1 byte  - 1 byte msg length
-                 * HDR_CHK   - 1 byte  - 1 byte msg header checksum
-	         * SERVOS    - 8 bytes - 1 byte per servo
-	         * BUTTONS   - 3 bytes - 2 bits per pin (allow more than on/off, e.g. 3-pos switch)
-	         * CHECKSUM  - 1 byte  - 1 byte XOR checksum
-	         */
-          
-	        for(x = 0 ; x < SERVO_COUNT ; x++) {
+		for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
 
-	          servos[x] = msg->messageBuffer[x + MSG_HEADER_SIZE]; // Set latest servo values from msg
+			buttons[(x * 4)] = (msg->messageBuffer[x + 2] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
+			buttons[(x * 4) + 1] = (msg->messageBuffer[x + 2] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
+			buttons[(x * 4) + 2] = (msg->messageBuffer[x + 2] & B00001100) >> 2; // Same
+			buttons[(x * 4) + 3] = (msg->messageBuffer[x + 2] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
 
 	        }
 
-	        for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
-
-	          buttons[(x * 4)] = (msg->messageBuffer[x + SERVO_COUNT + MSG_HEADER_SIZE] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
-	          buttons[(x * 4) + 1] = (msg->messageBuffer[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
-		  buttons[(x * 4) + 2] = (msg->messageBuffer[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00001100) >> 2; // Same
-	          buttons[(x * 4) + 3] = (msg->messageBuffer[x + SERVO_COUNT + MSG_HEADER_SIZE] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
-
-	        }
-
-                handleControlUpdate();
+		handleButtonUpdate();
 
 	} else if(msgType == MTYPE_PPZ) { // Handle PPZ message
 	
@@ -577,7 +596,6 @@ void processMessage(messageState *msg) {
 		writePPZMessage(msg);
 		#endif
 	
-	} else if(msgType == MTYPE_CFG) { // Handle configuration message
 	}
 
 }
@@ -643,7 +661,7 @@ int testChecksum(unsigned char *message, int length) {
 
 /* sendHeartbeat() - Send heartbeat */
 
-void sendAck() {
+void sendHeartbeat() {
 
 	unsigned char heartbeat[MTYPE_HEARTBEAT_SZ];
 
@@ -658,7 +676,7 @@ void sendAck() {
 
 	Serial.write(heartbeat, MTYPE_HEARTBEAT_SZ);     // Send the sync ACK
         Serial.flush();                         // Flush the serial buffer since it may be full of garbage
-	lastMsgSentTime = millis();
+	lastMessageSentTime = millis();
 
 }
 
@@ -678,8 +696,9 @@ void sendAck(messageState *msg) {
 	pingReply[2] = msg->messageBuffer[2];
 	pingReply[3] = generateChecksum(pingReply, MTYPE_PING_REPLY_SZ - 1); // Store our checksum as the last byte
 
-	Serial.write(msg, msgSize);     // Send the sync ACK
+	Serial.write(pingReply, MTYPE_PING_REPLY_SZ);     // Send the sync ACK
         Serial.flush();                         // Flush the serial buffer since it may be full of garbage
+	lastMessageSentTime = millis();
 
 }
 
@@ -722,7 +741,7 @@ void updateLights() {
 void checkSignal() {
 
 	unsigned long currentTime = millis(); // get current time
-	if((currentTime - lastMsgTime) > LOST_MSG_THRESHOLD) {
+	if((currentTime - lastMessageTime) > LOST_MSG_THRESHOLD) {
 
 		if(!lostSignal) {
       
@@ -745,7 +764,7 @@ void checkSignal() {
 			writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
 			#endif
 			#if DEBUG_LEVEL == 4
-			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----commandsSinceLastAck: %d currentTime: %lu lastMsgTime: %lu diff: %lu > %lu-", commandsSinceLastAck, currentTime, lastMsgTime, (currentTime - lastMsgTime), LOST_MSG_THRESHOLD); // Build debug message
+			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----commandsSinceLastAck: %d currentTime: %lu lastMessageTime: %lu diff: %lu > %lu-", commandsSinceLastAck, currentTime, lastMessageTime, (currentTime - lastMessageTime), LOST_MSG_THRESHOLD); // Build debug message
 			writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
 			#endif
 			lights[STATUS_LIGHT].interval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
@@ -815,18 +834,11 @@ void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
 }
 
 
-/* handleControlUpdate() - Handle updates to the controls */
+/* handleButtonUpdate() - Handle updates to the controls */
 
-void handleControlUpdate() {
+void handleButtonUpdate() {
   
 	int x;
-	// Write all remaning servo pulses
-	storePulse(0, servos[0], 0, 254);
-	for(x = 1 ; x < SERVO_COUNT ; x++) {
-
-		storePulse(x, servos[x], 0, 180);
-
-	}
 
 	if(buttons[4] > 0) { // Handle navlight button
     
@@ -879,6 +891,7 @@ void writeXBeeMessage(messageState *msg, unsigned char msgType) {
 	msg->messageBuffer[msg->length - 1] = generateChecksum(msg->messageBuffer, msg->length - 1); // Fill in our checksum for the whole message
    
 	Serial.write(msg->messageBuffer, msg->length);  // Write out the message
+	lastMessageSentTime = millis();
      
 }
 
@@ -891,13 +904,13 @@ void writePPZMessage(messageState *msg) {
 	
 	msg->messageBuffer[msg->length - 1] = '\0'; // End-of-string for last character replaces checksum
 
-	for(x = 0 ; x < msg->length - MSG_HEADER_SIZE; x++) {
+	for(x = 0 ; x < msg->length - PPZ_MSG_HEADER_SIZE; x++) {
 	
-		msg->messageBuffer[x] = msg->messageBuffer[x + MSG_HEADER_SIZE]; // Shift everything MSG_HEADER_SIZE to the left to drop the header
+		msg->messageBuffer[x] = msg->messageBuffer[x + PPZ_MSG_HEADER_SIZE]; // Shift everything PPZ_MSG_HEADER_SIZE to the left to drop the header
 	
 	}
 
-	Serial1.write(msg->messageBuffer, msg->length - MSG_HEADER_SIZE);  // Write out the message, minus the header size
+	Serial1.write(msg->messageBuffer, msg->length - PPZ_MSG_HEADER_SIZE);  // Write out the message, minus the header size
      
 }
 #endif
