@@ -50,8 +50,8 @@
 #define FLASHING_LIGHTS 2
 
 #define VERSION_MAJOR 3     // Major version #
-#define VERSION_MINOR 0     // Minor #
-#define VERSION_MOD   1     // Mod #
+#define VERSION_MINOR 2     // Minor #
+#define VERSION_MOD   0     // Mod #
 #define VERSION_TAG   "DBG" // Tag
 
 #define MSG_BEGIN            0xFF    // Begin of control message indicator byte
@@ -76,8 +76,9 @@
 #define MTYPE_BUTTON_UPDATE_SZ   6    // Buttons update
 
 #define MSG_BUFFER_SIZE       256
-#define LOST_MSG_THRESHOLD 1000UL    // How long without legit msg before lostSignal gets set
+#define LOST_MSG_THRESHOLD 1000UL    // How long without legit msg before handShook gets unset
 #define HEARTBEAT_INTERVAL  500UL    // 500ms
+#define PING_INTERVAL       100UL    // 100ms
 #define PPZ_MSG_HEADER_SIZE     3    // PPZ msg header size in bytes
 
 #define SERVO_COUNT   8     // # of servos
@@ -103,7 +104,6 @@
 unsigned int servos[SERVO_COUNT];        // store servo states
 unsigned int buttons[BUTTON_COUNT];      // store button states
 
-boolean lostSignal = true;        // lostSignal state
 boolean handShook = false;
 unsigned char pingData;
 unsigned long lastMessageTime = -1UL * LOST_MSG_THRESHOLD; // Time of last legit message, -100 initially so the PPM won't turn on until we get a real message
@@ -168,12 +168,10 @@ void setup() {
 void loop() {
 
 	int x;
-	unsigned long currentTime;
-	currentTime = millis();
 	// keep track of last time we send a heartbeat
 	updateLights();        // Check if we need to update any lights
 
-	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessage functions should be run with a much higher frequency than the LED updates or checkSignal()
+	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessage functions should be run with a much higher frequency than the LED updates or handleSignal()
   
 		checkXBeeMessages(&xbeeMsg); // Check for incoming XBee messages
 		#ifdef __AVR_ATmega644P__
@@ -181,16 +179,8 @@ void loop() {
 		#endif
 
 	}
-	
-	// send heartbeat if we need to
 
-	if((lastMessageSentTime - currentTime) > HEARTBEAT_INTERVAL) {
-
-		sendHeartbeat();
-
-	}
-
-	checkSignal();  // Check if the signal is still good
+	handleSignal();  // Check if the signal is still good
 
 }
 
@@ -463,7 +453,7 @@ int getMessageLength(messageState *msg) {
 
 	if(msg->readBytes > 1) { // Do zero-parameter types first, if we can't find one, see if we have enough characters for one of the parametered types
 
-		if(MTYPE_HEARTBEAT) { // Do 3-char long messages first
+		if(msg->messageBuffer[1] == MTYPE_HEARTBEAT) { // Do 3-char long messages first
 
 			return MTYPE_HEARTBEAT_SZ;
 
@@ -515,11 +505,6 @@ void processMessage(messageState *msg) {
 
         int x;
 	unsigned char msgType = msg->messageBuffer[1];
-
-	#if DEBUG_LEVEL == 1
-	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CSLA: %d-", commandsSinceLastAck); // Build debug message
-	writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                                // Write debug message
-	#endif
 
 	if(msgType == MTYPE_PING) { // We got a ping, send an ack
 
@@ -639,7 +624,7 @@ int testChecksum(unsigned char *message, int length) {
 
 	}
 	#if DEBUG_LEVEL == 1
-	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHK: %x CSLA: %d-", checksum, commandsSinceLastAck); // Build debug message
+	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHK: %x-", checksum); // Build debug message
 	writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                         // Write debug message
 	#endif
 
@@ -673,9 +658,25 @@ void sendHeartbeat() {
 	heartbeat[0] = MSG_BEGIN;
 	heartbeat[1] = MTYPE_HEARTBEAT;
 	heartbeat[2] = generateChecksum(heartbeat, MTYPE_HEARTBEAT_SZ - 1); // Store our checksum as the last byte
-
+	
 	Serial.write(heartbeat, MTYPE_HEARTBEAT_SZ);     // Send the sync ACK
-        Serial.flush();                         // Flush the serial buffer since it may be full of garbage
+	lastMessageSentTime = millis();
+
+}
+
+/* sendPing() - Send ping! */
+
+void sendPing() {
+
+	unsigned char ping[4];
+	pingData = random(0, 256);
+
+	ping[0] = MSG_BEGIN;
+	ping[1] = MTYPE_PING;
+	ping[2] = pingData;
+	ping[3] = generateChecksum(ping, MTYPE_PING_SZ - 1); // Store our checksum as the last byte
+
+	Serial.write(ping, MTYPE_PING_SZ);     // Send the ping
 	lastMessageSentTime = millis();
 
 }
@@ -697,7 +698,6 @@ void sendAck(messageState *msg) {
 	pingReply[3] = generateChecksum(pingReply, MTYPE_PING_REPLY_SZ - 1); // Store our checksum as the last byte
 
 	Serial.write(pingReply, MTYPE_PING_REPLY_SZ);     // Send the sync ACK
-        Serial.flush();                         // Flush the serial buffer since it may be full of garbage
 	lastMessageSentTime = millis();
 
 }
@@ -736,17 +736,17 @@ void updateLights() {
 	
 }
 
-/* checkSignal() - Check the signal state and make necessary updates */
+/* handleSignal() - Check the signal state and make necessary updates */
 
-void checkSignal() {
+void handleSignal() {
 
 	unsigned long currentTime = millis(); // get current time
-	if((currentTime - lastMessageTime) > LOST_MSG_THRESHOLD) {
+	if(handShook) { // Signal is still good last we checked
 
-		if(!lostSignal) {
-      
+		if((currentTime - lastMessageTime) > LOST_MSG_THRESHOLD) { // Check if the signal is actually still good
+     
 			cli(); // Do not allow timer ppm disabling to be interrupted
-			lostSignal = true;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set lostSignal
+			handShook = false;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set handShook = false
 			ppmON = false;                                   // Disable PPM
 			TIMSK1 = B00000000;                              // Disable interrupt on compare match
 			TCCR1A = B00000000;                              // Disable fast PWM     
@@ -772,44 +772,58 @@ void checkSignal() {
 			digitalWrite(DEBUG_PIN1, HIGH);
 			#endif
 			sei(); // Re-enable interrupts
-      
-		}
+
+		} else { // The signal is good, do we need to send a heartbeat?
+
+			if((currentTime - lastMessageSentTime) > HEARTBEAT_INTERVAL) {
+
+				sendHeartbeat();
+
+			}
+
+			if(!ppmON) {  // Restart PPM since it was off
+
+				cli();  // This shouldn't get interrupted since PPM is off but just to be safe..
+
+				ppmON = true;                           // turn on PPM status flag
+				lights[STATUS_LIGHT].interval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+
+				#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
+				dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Starting PPM, lostSignal = false-"); // Build debug message
+				writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
+				#endif        
+		        
+				TCCR1B = B00001000;                     // CTC mode, clock disabled, OCR1A will never be reached by TCNT1 'coz no clock is running
+				TCCR1A = B11000000;                     // CTC, set OC1A HIGH on match
+	
+				OCR1A = 0xFFFF;                         // Make OCR1A max so it doesn't get hit
+	
+				TCCR1C = B10000000;                     // Force match, should set pin high, WILL NOT generate ISR() call        
+
+				OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
+				currentPulse = 1;                       // Set currentPulse to 1 since there will be no ISR() call to increment it
+
+				#ifdef __AVR_ATmega644P__
+				DDRD  |= B00100000;                     // Enable output on OC1A
+				#else
+				DDRB  |= B00000010;                     // Enable output on OC1A
+				#endif
+  
+				TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A               
+				TCCR1A = B01000011;                     // Fast PWM mode, will generate ISR() when it reaches OCR1A (pulse[0]), thus starting the PPM signal
+				TCCR1B = B00011010;                     // Fast PWM, 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into 1/2 useconds (16MHz / 8 = 2MHz)        
+				sei(); // Re-enable interrupts
+    
+			}
+
+		} 
 
 	} else {
-    
-		if(!ppmON) {  // Restart PPM since it was off
 
-			cli();  // This shouldn't get interrupted since PPM is off but just to be safe..
+		if((currentTime - lastMessageSentTime) > PING_INTERVAL) { // Signal is bad, send a ping to try restore connection
 
-			ppmON = true;                           // turn on PPM status flag
-			lights[STATUS_LIGHT].interval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+			sendPing(); 
 
-			#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
-			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Starting PPM, lostSignal = false-"); // Build debug message
-			writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
-			#endif        
-        
-			TCCR1B = B00001000;                     // CTC mode, clock disabled, OCR1A will never be reached by TCNT1 'coz no clock is running
-			TCCR1A = B11000000;                     // CTC, set OC1A HIGH on match
-
-			OCR1A = 0xFFFF;                         // Make OCR1A max so it doesn't get hit
-
-			TCCR1C = B10000000;                     // Force match, should set pin high, WILL NOT generate ISR() call        
-
-			OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
-			currentPulse = 1;                       // Set currentPulse to 1 since there will be no ISR() call to increment it
-
-			#ifdef __AVR_ATmega644P__
-			DDRD  |= B00100000;                     // Enable output on OC1A
-			#else
-			DDRB  |= B00000010;                     // Enable output on OC1A
-			#endif
-  
-			TIMSK1 = B00000010;                     // Interrupt on compare match with OCR1A               
-			TCCR1A = B01000011;                     // Fast PWM mode, will generate ISR() when it reaches OCR1A (pulse[0]), thus starting the PPM signal
-			TCCR1B = B00011010;                     // Fast PWM, 8 prescaler (bit 2, disabled until PPM on), 16bits holds up to 65535, 8 PS puts our counter into 1/2 useconds (16MHz / 8 = 2MHz)        
-			sei(); // Re-enable interrupts
-    
 		}
     
 	}
