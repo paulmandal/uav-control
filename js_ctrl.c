@@ -588,9 +588,9 @@ int readConfig(configValues *configInfo) {
 	printf("\nUsing config from %s:\n", CONFIG_FILE); // Print config values
 	printf("                  XBee Port: %s\n", configInfo->xbeePortFile);
 	printf("              Joystick Port: %s\n", configInfo->joystickPortFile);
-	printf(" Joystick Discard Threshold: %7d\n", configInfo->jsDiscardUnder);
-	printf("               PPM Interval: %7dusec\n", configInfo->ppmInterval);
-	printf("          Timeout Threshold: %7fsec\n", (double)configInfo->timeoutThreshold);
+	printf(" Joystick Discard Threshold: %7d \n", configInfo->jsDiscardUnder);
+	printf("               PPM Interval: %7d μs\n", configInfo->ppmInterval);
+	printf("          Timeout Threshold: %7.2f s\n", (double)configInfo->timeoutThreshold);
 	printf("         Button State Count: \n\n");
 	
 	for(x = 0 ; x < buttonCount ; x++) {
