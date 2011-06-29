@@ -34,6 +34,7 @@
                         // 6 - PPM pulse values
                         // 7 - Only start debug message
                         // 8 - Report bad checksums
+			// 9 - Report good and bad checksums
 
 #ifdef __AVR_ATmega644P__
 #define DEBUG_PIN1     4 // Pin for debug signaling
@@ -51,7 +52,7 @@
 
 #define VERSION_MAJOR 3     // Major version #
 #define VERSION_MINOR 2     // Minor #
-#define VERSION_MOD   0     // Mod #
+#define VERSION_MOD   1     // Mod #
 #define VERSION_TAG   "DBG" // Tag
 
 #define MSG_BEGIN            0xFF    // Begin of control message indicator byte
@@ -153,7 +154,7 @@ void setup() {
   
 	#if DEBUG_LEVEL > 0
 	initMessage(&dbgMsg);      // Init our debug message
-	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----joystick2ppm version %d.%d.%d-%s... Open for debugging mode...-", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);  // Write a debug message leading and trailing dashes will be replaced with header and checksums
+	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---joystick2ppm version %d.%d.%d-%s... Open for debugging mode...-", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);  // Write a debug message leading and trailing dashes will be replaced with header and checksums
 	writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);  // Send debug message
 	#endif
   
@@ -226,7 +227,7 @@ void initPPM() {
 	#if DEBUG_LEVEL == 5
 	for(x = 0 ; x < PPM_PULSES ; x++) {
    
-		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d -", x, pulses[x]); // Build debug message
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Pulse[%d]: %d -", x, pulses[x]); // Build debug message
 		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                              // Write debug message
     
 	}
@@ -300,7 +301,7 @@ boolean checkXBeeMessages(messageState *msg) {
 
 	}
 
-	if(msg->readBytes < msg->length || msg->length < 0) {  // We either aren't done reading the message or we don't have MSG_BEGIN and/or MTYPE and/or PARAM to tell us the real length
+	if(msg->readBytes < msg->length || (msg->length < 0 && msg->readBytes < 3)) {  // We either aren't done reading the message or we don't have MSG_BEGIN and/or MTYPE and/or PARAM to tell us the real length
 
 		if(Serial.available() > 0)  {  // Byte is availabe, read it
 
@@ -330,73 +331,115 @@ boolean checkXBeeMessages(messageState *msg) {
 
 		}	
 
-	} else { // Message is finished, process it
+	} else { 
 
-		int x, y;	
+		if(msg->length > 0) { // Message is finished, process it
 
-		if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  
+			if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  
 
-			processMessage(msg);
-			if(msg->messageBuffer[1] != MTYPE_PING) {
+				processMessage(msg);
+				if(msg->messageBuffer[1] != MTYPE_PING) {
 
-				lastMessageTime = millis(); // Set last message time, except for from a ping
-
-			}
-
-		} else {
-
-			x = 1;
-			msg->length = -1;
-
-			while(x < msg->readBytes && msg->length < 0) { // Try to find out if we have a legit message later in the buffer
-
-				if(msg->messageBuffer[x] == MSG_BEGIN) { // Looks like a MSG_BEGIN
-
-					for(y = 0 ; y < x ; y++) {
-
-						msg->messageBuffer[y] = msg->messageBuffer[y+x]; // Push everything to the left x spaces
-
-					}
-
-					msg->readBytes = msg->length - x;    // adjust number of read bytes 
-					msg->length = getMessageLength(msg); // get the new length, if it's an invalid message we'll get -1
-					x = 0;
+					lastMessageTime = millis(); // Set last message time, except for from a ping
 
 				}
+				cleanMessage(msg, true);
 
-				x++;
+				return true;
 
-			}
+			} 
 
 		}
 
-		if(msg->readBytes > msg->length) { // We've got more bytes in the buffer than the message length, shift everything to the left msg->length
+		cleanMessage(msg, false);
+		
+		return true;
+
+	}
+
+}
+
+/* cleanMessage(msg) - Wipe out msg, or shift it to the left if it has more than one message in the buffer */
+
+void cleanMessage(messageState *msg, boolean wipeCurrent) {
+
+	int x, y;
+for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
+
+				msg->messageBuffer[x] = '\0';
+
+			}
+
+			msg->readBytes = 0;   // Zero out readBytes
+			msg->length = -1;     // Set message length to -1
+/*
+	if(wipeCurrent) { // Are we supposed to wipe the current message?
+
+		if(msg->readBytes > msg->length) {  // There are more bytes than this just this message in the buffer..
 
 			for(x = 0 ; x < (msg->readBytes - msg->length) ; x++) {
 
 				msg->messageBuffer[x] = msg->messageBuffer[x + msg->length];
 
 			}
+			for(x = msg->length ; x < msg->readBytes ; x++) {
+
+				msg->messageBuffer[x] = '\0';
+
+			}
 			msg->readBytes = msg->readBytes - msg->length;
-			msg->length = getMessageLength(msg);
+			msg->length = -1;
 
-		} else {
 
-			// Clear out message so it's ready to be used again	
+		} else { // No extra bytes in the buffer
+
 			for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
 
 				msg->messageBuffer[x] = '\0';
 
 			}
+
 			msg->readBytes = 0;   // Zero out readBytes
-			msg->length = -1;     // Set message length to -1		
-			
-		
+			msg->length = -1;     // Set message length to -1
+
 		}
-		return true;
 
-	}
+	} else {  // Don't wipe the current message, maybe bad checksum
 
+		x = 0;
+		msg->length = -1;
+
+		while(x < msg->readBytes && msg->length < 0) {
+
+			x++;
+
+			if(msg->messageBuffer[x] == MSG_BEGIN) { // This is a possible new message
+
+				for(y = 0 ; y < (msg->readBytes - x) ; y++) {
+
+					msg->messageBuffer[y] = msg->messageBuffer[x + y]; // To the left to the left
+
+				}
+
+				msg->readBytes = msg->readBytes - x;
+				msg->length = getMessageLength(msg);
+
+				if(msg->length < 0 && msg->readBytes > 2) {
+
+					x = 0;
+
+				} else {
+
+					return; // Return from function to keep the rest of the message
+
+				}
+
+			}
+
+		}
+
+	}	
+*/
 }
 
 /* checkPPZMessages() - Check for and handle any incoming PPZ messages */
@@ -411,7 +454,7 @@ boolean checkPPZMessages(messageState *msg) {
 		testByte = Serial1.read();  // Read our byte		
 
 		#if DEBUG_LEVEL == 1
-		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----PPZBYTE[%d - CSLA: %d]: %x-", dbgMsg.readBytes, commandsSinceLastAck, testByte);
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---PPZBYTE[%d - CSLA: %d]: %x-", dbgMsg.readBytes, commandsSinceLastAck, testByte);
 		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);
 		#endif		
 
@@ -461,9 +504,13 @@ int getMessageLength(messageState *msg) {
 
 			return MTYPE_PING_SZ;
 
-		} else if(msg->messageBuffer[1] == MTYPE_SINGLE_SERVO || msg->messageBuffer[1] == MTYPE_BUTTON_UPDATE) {
+		} else if(msg->messageBuffer[1] == MTYPE_SINGLE_SERVO) {
 
 			return MTYPE_SINGLE_SERVO_SZ;
+
+		} else if(msg->messageBuffer[1] == MTYPE_BUTTON_UPDATE) {
+
+			return MTYPE_BUTTON_UPDATE_SZ;
 
 		} else if(msg->messageBuffer[1] == MTYPE_ALL_SERVOS) {
 		
@@ -477,11 +524,29 @@ int getMessageLength(messageState *msg) {
 
 			if(msg->messageBuffer[1] == MTYPE_PPZ || msg->messageBuffer[1] == MTYPE_DEBUG) {
 
-				return (int)msg->messageBuffer[2];  // PPZ & Debug messages have length as param
+				int msgLength = (int)msg->messageBuffer[2];
+				if(msgLength < MSG_BUFFER_SIZE) {
+	
+					return msgLength;  // PPZ & Debug messages have length as param
+
+				} else {
+
+					return -1;
+
+				}
 
 			} else if(msg->messageBuffer[1] == MTYPE_VAR_SERVOS) {
 		
-				return 4 + ((int)msg->messageBuffer[2] * 2);  // Convert servo count to # of bytes (2 bytes per servo + begin + type + param + check)
+				int servoCount = ((int)msg->messageBuffer[2] * 2);
+				if(servoCount < SERVO_COUNT) {  // If we get close to SERVO_COUNT the sent message would be a ALL_SERVOS or FULL_UPDATE
+
+					return 4 + servoCount;  // Convert servo count to # of bytes (2 bytes per servo + begin + type + param + check)
+
+				} else {
+
+					return -1;
+
+				}
 
 			} else {
 
@@ -489,7 +554,11 @@ int getMessageLength(messageState *msg) {
 
 			}
 
-		} 
+		} else {
+
+			return -1;
+
+		}
 
 	} else {
 
@@ -526,7 +595,7 @@ void processMessage(messageState *msg) {
 		servoNum = (msg->messageBuffer[2] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
 		servoPos = (msg->messageBuffer[2] & B00000011) << 8; // Binary: 0000 0011, strip out servo number, shift top 2 bits of servo pos over
 		servoPos = servoPos | msg->messageBuffer[3]; // Store last 8 bits of servo position
-		storePulse(servoNum, servoPos, 0, 180);
+		storePulse(servoNum, servoPos, 0, 1024);
 		servos[servoNum] = servoPos;
 
 	} else if(msgType == MTYPE_VAR_SERVOS) {
@@ -542,7 +611,7 @@ void processMessage(messageState *msg) {
 			servoNum = (msg->messageBuffer[(x * 2) + 3] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
 			servoPos = (msg->messageBuffer[(x * 2) + 3] & B00000011) << 8; // Binary: 0000 0011, strip out servo number, shift top 2 bits of servo pos over
 			servoPos = servoPos | msg->messageBuffer[(x * 2) + 4]; // Store last 8 bits of servo position
-			storePulse(servoNum, servoPos, 0, 180);
+			storePulse(servoNum, servoPos, 0, 1024);
 			servos[servoNum] = servoPos;
 
 		}
@@ -557,7 +626,7 @@ void processMessage(messageState *msg) {
 			servoNum = (msg->messageBuffer[(x * 2) + 2] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
 			servoPos = (msg->messageBuffer[(x * 2) + 2] & B00000011) << 8; // Binary: 0000 0011, strip out servo number, shift top 2 bits of servo pos over
 			servoPos = servoPos | msg->messageBuffer[(x * 2) + 3]; // Store last 8 bits of servo position
-			storePulse(servoNum, servoPos, 0, 180);
+			storePulse(servoNum, servoPos, 0, 1024);
 			servos[servoNum] = servoPos;
 
 		}
@@ -610,32 +679,39 @@ int testChecksum(unsigned char *message, int length) {
 	int x;
 
 	#if DEBUG_LEVEL == 1
-	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHKMSG:-"); // Build debug message
+	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---CHKMSG:-"); // Build debug message
 	writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                         // Write debug message
 	#endif
 
 	for(x = 0 ; x < length ; x++) {
 
 		#if DEBUG_LEVEL == 1
-		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----%x-", (unsigned int)message[x]); // Build debug message
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---%x-", (unsigned int)message[x]); // Build debug message
 		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                         // Write debug message
 		#endif
                 checksum = checksum ^ (unsigned int)message[x];  // Test this message against its checksum (last byte)
 
 	}
 	#if DEBUG_LEVEL == 1
-	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----CHK: %x-", checksum); // Build debug message
+	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---CHK: %x-", checksum); // Build debug message
 	writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                         // Write debug message
 	#endif
 
 	if(checksum == 0x00) {
 
+		#if DEBUG_LEVEL == 9
+		if(message[1] != MTYPE_HEARTBEAT && message[1] != MTYPE_PING) {
+
+			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Good checksum (length: %d): %2x-", length, checksum); // Build debug message
+			writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                         // Write debug message		
+		}
+		#endif
 		return true;  // Checksum passed!
 
 	} else {
 
-		#if DEBUG_LEVEL == 8
-		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Bad checksum (length: %d): %2x-", length, checksum); // Build debug message
+		#if DEBUG_LEVEL == 8 || DEBUG_LEVEL == 9
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Bad checksum (length: %d): %2x-", length, checksum); // Build debug message
 		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                         // Write debug message		
 		#endif
 		return false;
@@ -651,7 +727,7 @@ void sendHeartbeat() {
 	unsigned char heartbeat[MTYPE_HEARTBEAT_SZ];
 
         #if DEBUG_LEVEL == 1
-      	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Sending HEARTBEAT:-"); // Build debug message
+      	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Sending HEARTBEAT:-"); // Build debug message
 	writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                   // Write debug message
 	#endif 
 
@@ -688,7 +764,7 @@ void sendAck(messageState *msg) {
 	unsigned char pingReply[4];
 
         #if DEBUG_LEVEL == 1
-      	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Sending PING ACK:-"); // Build debug message
+      	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Sending PING ACK:-"); // Build debug message
 	writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                   // Write debug message
 	#endif 
 
@@ -760,11 +836,11 @@ void handleSignal() {
 			DDRB  &= B11111101;                              // Disable output on OC1A
 			#endif
 			#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
-			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Stopping PPM, lostSignal = true-"); // Build debug message
+			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Stopping PPM, handShook = false-"); // Build debug message
 			writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
 			#endif
 			#if DEBUG_LEVEL == 4
-			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----commandsSinceLastAck: %d currentTime: %lu lastMessageTime: %lu diff: %lu > %lu-", commandsSinceLastAck, currentTime, lastMessageTime, (currentTime - lastMessageTime), LOST_MSG_THRESHOLD); // Build debug message
+			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---currentTime: %lu lastMessageTime: %lu diff: %lu > %lu-", currentTime, lastMessageTime, (currentTime - lastMessageTime), LOST_MSG_THRESHOLD); // Build debug message
 			writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
 			#endif
 			lights[STATUS_LIGHT].interval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
@@ -789,7 +865,7 @@ void handleSignal() {
 				lights[STATUS_LIGHT].interval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
 
 				#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
-				dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Starting PPM, lostSignal = false-"); // Build debug message
+				dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Starting PPM, lostSignal = false-"); // Build debug message
 				writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
 				#endif        
 		        
@@ -887,7 +963,7 @@ void handleButtonUpdate() {
 	#if DEBUG_LEVEL == 5
 	for(x = 0 ; x < PPM_PULSES ; x++) {
 
-		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "----Pulse[%d]: %d-", x, pulses[x]); // Build debug message
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Pulse[%d]: %d-", x, pulses[x]); // Build debug message
 		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                              // Write debug message
     
 	}
