@@ -35,7 +35,7 @@
 
 /* Definitions */
 
-#define DEBUG_LEVEL 3	      // Debug level - tells compiler to include or exclude debug message code
+#define DEBUG_LEVEL 0	      // Debug level - tells compiler to include or exclude debug message code
 			      // Debug level - 1 - Lost signal debug
 			      // Debug level - 2 - Debug joystick position info
 			      // Debug level - 3 - Debug incoming messages
@@ -44,7 +44,7 @@
 
 #define VERSION_MAJOR 3       // Version information, Major #
 #define VERSION_MINOR 2       // Minor #
-#define VERSION_MOD   0       // Mod #
+#define VERSION_MOD   1       // Mod #
 #define VERSION_TAG   "DBG"   // Tag
 
 #define MSG_BEGIN            0xFF    // Begin of control message indicator byte
@@ -190,6 +190,7 @@ int checkXBeeMessages(int msgPort, messageState *msg);
 int checkPPZMessages(int msgPort, messageState *msg);
 void processMessage(messageState *msg);
 int getMessageLength(messageState *msg);
+void cleanMessage(messageState *msg, int wipeCurrent);
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 unsigned char generateChecksum(unsigned char *message, int length);
 int testChecksum(unsigned char *message, int length);
@@ -897,7 +898,7 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 
 	}
 
-	if(msg->readBytes < msg->length || msg->length < 0) {  // We either aren't done reading the message or we don't have MSG_BEGIN and/or MTYPE and/or PARAM to tell us the real length
+	if(msg->readBytes < msg->length || (msg->length < 0 && msg->readBytes < 3)) {  // We either aren't done reading the message or we don't have MSG_BEGIN and/or MTYPE and/or PARAM to tell us the real length
 
 		if(read(msgPort, &testByte, sizeof(char)) == sizeof(char)) {  // We read a byte, so process it
 
@@ -943,74 +944,114 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 
 	} else { // Message is finished, process it
 
-		int x, y;
 		#if DEBUG_LEVEL == 3
 		printf("\n");
 		#endif	
 
-		if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  
+		if(msg->length > 0) { // Message is finished, process it
 
-			processMessage(msg);
-			if(msg->messageBuffer[1] != MTYPE_PING) {
+			if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  
 
-				signalInfo.lastMessageTime = time(NULL); // Set last message time, except for from a ping
+				processMessage(msg);
+				if(msg->messageBuffer[1] != MTYPE_PING) {
 
-			}
-
-		} else {
-
-			x = 1;
-			msg->length = -1;
-
-			while(x < msg->readBytes && msg->length < 0) { // Try to find out if we have a legit message later in the buffer
-
-				if(msg->messageBuffer[x] == MSG_BEGIN) { // Looks like a MSG_BEGIN
-
-					for(y = 0 ; y < x ; y++) {
-
-						msg->messageBuffer[y] = msg->messageBuffer[y+x]; // Push everything to the left x spaces
-
-					}
-
-					msg->readBytes = msg->length - x;    // adjust number of read bytes 
-					msg->length = getMessageLength(msg); // get the new length, if it's an invalid message we'll get -1
-					x = 0;
+					signalInfo.lastMessageTime = time(NULL); // Set last message time, except for from a ping
 
 				}
+				cleanMessage(msg, 1);
+				return 1;
 
-				x++;
+			} 
+
+		} 
+
+		cleanMessage(msg, 0);
+
+		return 1;
+
+	}
+
+}
+
+/* cleanMessage(msg) - Wipe out msg, or shift it to the left if it has more than one message in the buffer */
+
+void cleanMessage(messageState *msg, int wipeCurrent) {
+
+	int x, y;
+for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
+
+				msg->messageBuffer[x] = '\0';
 
 			}
 
-		}
+			msg->readBytes = 0;   // Zero out readBytes
+			msg->length = -1;     // Set message length to -1
+	/*if(wipeCurrent) { // Are we supposed to wipe the current message?
 
-		if(msg->readBytes > msg->length) { // We've got more bytes in the buffer than the message length, shift everything to the left msg->length
+		if(msg->readBytes > msg->length) {  // There are more bytes than this just this message in the buffer..
 
 			for(x = 0 ; x < (msg->readBytes - msg->length) ; x++) {
 
 				msg->messageBuffer[x] = msg->messageBuffer[x + msg->length];
 
 			}
+			for(x = msg->length ; x < msg->readBytes ; x++) {
+
+				msg->messageBuffer[x] = '\0';
+
+			}
 			msg->readBytes = msg->readBytes - msg->length;
-			msg->length = getMessageLength(msg);
+			msg->length = -1;
 
-		} else {
 
-			// Clear out message so it's ready to be used again	
+		} else { // No extra bytes in the buffer
+
 			for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
 
 				msg->messageBuffer[x] = '\0';
 
 			}
+
 			msg->readBytes = 0;   // Zero out readBytes
 			msg->length = -1;     // Set message length to -1
-		
-			
-		
-		}
-		return 1;
 
-	}
+		}
+
+	} else {  // Don't wipe the current message, maybe bad checksum
+
+		x = 0;
+		msg->length = -1;
+
+		while(x < msg->readBytes && msg->length < 0) {
+
+			x++;
+
+			if(msg->messageBuffer[x] == MSG_BEGIN) { // This is a possible new message
+
+				for(y = 0 ; y < (msg->readBytes - x) ; y++) {
+
+					msg->messageBuffer[y] = msg->messageBuffer[x + y]; // To the left to the left
+
+				}
+
+				msg->readBytes = msg->readBytes - x;
+				msg->length = getMessageLength(msg);
+
+				if(msg->length < 0 && msg->readBytes > 2) {
+
+					x = 0;
+
+				} else {
+
+					return; // Return from function to keep the rest of the message
+
+				}
+
+			}
+
+		}
+
+	}*/	
 
 }
 
@@ -1071,9 +1112,13 @@ int getMessageLength(messageState *msg) {
 
 			return MTYPE_PING_SZ;
 
-		} else if(msg->messageBuffer[1] == MTYPE_SINGLE_SERVO || msg->messageBuffer[1] == MTYPE_BUTTON_UPDATE) {
+		} else if(msg->messageBuffer[1] == MTYPE_SINGLE_SERVO) {
 
 			return MTYPE_SINGLE_SERVO_SZ;
+
+		} else if(msg->messageBuffer[1] == MTYPE_BUTTON_UPDATE) {
+
+			return MTYPE_BUTTON_UPDATE_SZ;
 
 		} else if(msg->messageBuffer[1] == MTYPE_ALL_SERVOS) {
 		
@@ -1087,11 +1132,29 @@ int getMessageLength(messageState *msg) {
 
 			if(msg->messageBuffer[1] == MTYPE_PPZ || msg->messageBuffer[1] == MTYPE_DEBUG) {
 
-				return (int)msg->messageBuffer[2];  // PPZ & Debug messages have length as param
+				int msgLength = (int)msg->messageBuffer[2];
+				if(msgLength < MSG_BUFFER_SIZE) {
+	
+					return msgLength;  // PPZ & Debug messages have length as param
+
+				} else {
+
+					return -1;
+
+				}
 
 			} else if(msg->messageBuffer[1] == MTYPE_VAR_SERVOS) {
 		
-				return 4 + ((int)msg->messageBuffer[2] * 2);  // Convert servo count to # of bytes (2 bytes per servo + begin + type + param + check)
+				int servoCount = ((int)msg->messageBuffer[2] * 2);
+				if(servoCount < SERVO_COUNT) {  // If we get close to SERVO_COUNT the sent message would be a ALL_SERVOS or FULL_UPDATE
+
+					return 4 + servoCount;  // Convert servo count to # of bytes (2 bytes per servo + begin + type + param + check)
+
+				} else {
+
+					return -1;
+
+				}
 
 			} else {
 
@@ -1099,7 +1162,11 @@ int getMessageLength(messageState *msg) {
 
 			}
 
-		} 
+		} else {
+
+			return -1;
+
+		}
 
 	} else {
 
