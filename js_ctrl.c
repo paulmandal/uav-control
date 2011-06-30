@@ -41,6 +41,8 @@
 			      // Debug level - 3 - Debug incoming messages
 			      // Debug level - 4 - Time incoming messages
 			      // Debug level - 5 - Bad checksum reports
+			      // Debug level - 6 - Debug outgoing messages
+			      // Debug level - 7 - Debug servo encoding
 
 #define VERSION_MAJOR 3       // Version information, Major #
 #define VERSION_MINOR 2       // Minor #
@@ -134,7 +136,7 @@ typedef struct _configValues {
 	int *buttonStateCount;   // Button state counts
 	int jsDiscardUnder;	 // Joystick discard under threshold
 	int ppmInterval;	 // Interval to send commands to XBee
-	time_t timeoutThreshold; // How long without a message before timeout
+	double timeoutThreshold; // How long without a message before timeout
 	int contextButton;       // Button that affects joystick context
 
 } configValues;
@@ -168,6 +170,7 @@ typedef struct _signalState {
 	int localRSSI;		   // Local RSSI
 	int remoteRSSI;		   // Remote RSSI
 	unsigned char pingData;    // Random character sent along with last ping
+	int pingCounter;
 	time_t lostSignalTime;     // Time signal was lost
 	unsigned long totalMsgs;
 
@@ -190,7 +193,6 @@ int checkXBeeMessages(int msgPort, messageState *msg);
 int checkPPZMessages(int msgPort, messageState *msg);
 void processMessage(messageState *msg);
 int getMessageLength(messageState *msg);
-void cleanMessage(messageState *msg, int wipeCurrent);
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 unsigned char generateChecksum(unsigned char *message, int length);
 int testChecksum(unsigned char *message, int length);
@@ -327,6 +329,7 @@ void initGlobals() {
 	signalInfo.totalMsgs = 0;
 	signalInfo.localRSSI = 0;
 	signalInfo.remoteRSSI = 0;
+	signalInfo.pingCounter = 0;
 	signalInfo.lastMessageTime = time(NULL);
 	signalInfo.lostSignalTime = time(NULL);
 	
@@ -526,7 +529,7 @@ int readConfig(configValues *configInfo) {
 
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
 
-					configInfo->timeoutThreshold = ((time_t)atoi(line)) / 1000.0; // Translate ASCII -> int
+					configInfo->timeoutThreshold = atof(line); // Translate ASCII -> double
 					readCount++;
 
 				}
@@ -591,7 +594,7 @@ int readConfig(configValues *configInfo) {
 	printf("              Joystick Port: %s\n", configInfo->joystickPortFile);
 	printf(" Joystick Discard Threshold: %7d \n", configInfo->jsDiscardUnder);
 	printf("               PPM Interval: %7d μs\n", configInfo->ppmInterval);
-	printf("          Timeout Threshold: %7.2f s\n", (double)configInfo->timeoutThreshold);
+	printf("          Timeout Threshold: %7.2f s\n", configInfo->timeoutThreshold);
 	printf("         Button State Count: \n\n");
 	
 	for(x = 0 ; x < buttonCount ; x++) {
@@ -646,7 +649,7 @@ void initAirframe() {
 
 	for(i = 0 ; i < SERVO_COUNT ; i++) {
 
-		airframeState.servos[i] = 90;  // Set all servo pos to 90
+		airframeState.servos[i] = 511;  // Set all servo pos to 511
 
 	}
 
@@ -684,7 +687,7 @@ void initRumble(jsState *joystickState) {
 void translateJStoAF(jsState joystickState) {
 
 	int x;
-	x = map(joystickState.axis[ROLL], -32767, 32767, 1, 180);
+	x = map(joystickState.axis[ROLL], -32767, 32767, 0, 1023);
 	if(x != airframeState.servos[SRV_LEFTWING]) {
 
 		airframeState.servos_changed[SRV_LEFTWING] = 1;
@@ -692,7 +695,7 @@ void translateJStoAF(jsState joystickState) {
 
 	}
 
-	x = map(joystickState.axis[YAW], -32767, 32767, 1, 180);
+	x = map(joystickState.axis[YAW], -32767, 32767, 0, 1023);
 	if(x != airframeState.servos[SRV_RIGHTWING]) {
 
 		airframeState.servos_changed[SRV_RIGHTWING] = 1;
@@ -700,7 +703,7 @@ void translateJStoAF(jsState joystickState) {
 
 	}
 
-	x = map(joystickState.axis[PITCH], -32767, 32767, 1, 180);
+	x = map(joystickState.axis[PITCH], -32767, 32767, 0, 1023);
 	if(x != airframeState.servos[SRV_L_ELEVRON]) {
 
 		airframeState.servos_changed[SRV_L_ELEVRON] = 1;
@@ -708,7 +711,7 @@ void translateJStoAF(jsState joystickState) {
 
 	}
 
-	x = map(joystickState.axis[THROTTLE], -32767, 32767, 1, 180);
+	x = map(joystickState.axis[THROTTLE], -32767, 32767, 0, 1023);
 	if(x != airframeState.servos[SRV_R_ELEVRON]) {
 
 		airframeState.servos_changed[SRV_R_ELEVRON] = 1;
@@ -892,13 +895,13 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 
 	unsigned char testByte = 0x00;
 
-	if(msg->length < 0) { // Message has < 0 length, check if anything in messageBuffer can fill that in
+	if(msg->length == -1) { // Message has -1 length, check if anything in messageBuffer can fill that in
 
 		msg->length = getMessageLength(msg);
 
 	}
 
-	if(msg->readBytes < msg->length || (msg->length < 0 && msg->readBytes < 3)) {  // We either aren't done reading the message or we don't have MSG_BEGIN and/or MTYPE and/or PARAM to tell us the real length
+	if(msg->readBytes < msg->length || msg->length == -1) {  // We either aren't done reading the message or we don't have MSG_BEGIN and/or MTYPE and/or PARAM to tell us the real length
 
 		if(read(msgPort, &testByte, sizeof(char)) == sizeof(char)) {  // We read a byte, so process it
 
@@ -958,100 +961,25 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 					signalInfo.lastMessageTime = time(NULL); // Set last message time, except for from a ping
 
 				}
-				cleanMessage(msg, 1);
-				return 1;
 
 			} 
 
 		} 
 
-		cleanMessage(msg, 0);
+		int x;
+
+		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
+
+			msg->messageBuffer[x] = '\0';
+
+		}
+
+		msg->readBytes = 0;   // Zero out readBytes
+		msg->length = -1;     // Set message length to -1
 
 		return 1;
 
 	}
-
-}
-
-/* cleanMessage(msg) - Wipe out msg, or shift it to the left if it has more than one message in the buffer */
-
-void cleanMessage(messageState *msg, int wipeCurrent) {
-
-	int x, y;
-for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
-
-				msg->messageBuffer[x] = '\0';
-
-			}
-
-			msg->readBytes = 0;   // Zero out readBytes
-			msg->length = -1;     // Set message length to -1
-	/*if(wipeCurrent) { // Are we supposed to wipe the current message?
-
-		if(msg->readBytes > msg->length) {  // There are more bytes than this just this message in the buffer..
-
-			for(x = 0 ; x < (msg->readBytes - msg->length) ; x++) {
-
-				msg->messageBuffer[x] = msg->messageBuffer[x + msg->length];
-
-			}
-			for(x = msg->length ; x < msg->readBytes ; x++) {
-
-				msg->messageBuffer[x] = '\0';
-
-			}
-			msg->readBytes = msg->readBytes - msg->length;
-			msg->length = -1;
-
-
-		} else { // No extra bytes in the buffer
-
-			for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
-
-				msg->messageBuffer[x] = '\0';
-
-			}
-
-			msg->readBytes = 0;   // Zero out readBytes
-			msg->length = -1;     // Set message length to -1
-
-		}
-
-	} else {  // Don't wipe the current message, maybe bad checksum
-
-		x = 0;
-		msg->length = -1;
-
-		while(x < msg->readBytes && msg->length < 0) {
-
-			x++;
-
-			if(msg->messageBuffer[x] == MSG_BEGIN) { // This is a possible new message
-
-				for(y = 0 ; y < (msg->readBytes - x) ; y++) {
-
-					msg->messageBuffer[y] = msg->messageBuffer[x + y]; // To the left to the left
-
-				}
-
-				msg->readBytes = msg->readBytes - x;
-				msg->length = getMessageLength(msg);
-
-				if(msg->length < 0 && msg->readBytes > 2) {
-
-					x = 0;
-
-				} else {
-
-					return; // Return from function to keep the rest of the message
-
-				}
-
-			}
-
-		}
-
-	}*/	
 
 }
 
@@ -1102,7 +1030,7 @@ int checkPPZMessages(int msgPort, messageState *msg) {
 
 int getMessageLength(messageState *msg) {
 
-	if(msg->readBytes > 1) { // Do zero-parameter types first, if we can't find one, see if we have enough characters for one of the parametered types
+	if(msg->readBytes == 2) { // Do zero-parameter types first, if we can't find one, see if we have enough characters for one of the parametered types
 
 		if(msg->messageBuffer[1] == MTYPE_HEARTBEAT) { // Do 3-char long messages first
 
@@ -1128,43 +1056,43 @@ int getMessageLength(messageState *msg) {
 	
 			return MTYPE_FULL_UPDATE_SZ;
 
-		} else if(msg->readBytes > 2) {  // Didn't find any non-parameter message types, let's see if we have a parametered one
+		}  else {
 
-			if(msg->messageBuffer[1] == MTYPE_PPZ || msg->messageBuffer[1] == MTYPE_DEBUG) {
+			return -1; // Probably a parametered type or a bad message
 
-				int msgLength = (int)msg->messageBuffer[2];
-				if(msgLength < MSG_BUFFER_SIZE) {
+		}
+
+	} else if(msg->readBytes > 2) { // Didn't find any non-parameter message types, let's see if we have a parametered one
+
+		if(msg->messageBuffer[1] == MTYPE_PPZ || msg->messageBuffer[1] == MTYPE_DEBUG) {
+
+			int msgLength = (int)msg->messageBuffer[2];
+			if(msgLength < MSG_BUFFER_SIZE) {
 	
-					return msgLength;  // PPZ & Debug messages have length as param
-
-				} else {
-
-					return -1;
-
-				}
-
-			} else if(msg->messageBuffer[1] == MTYPE_VAR_SERVOS) {
-		
-				int servoCount = ((int)msg->messageBuffer[2] * 2);
-				if(servoCount < SERVO_COUNT) {  // If we get close to SERVO_COUNT the sent message would be a ALL_SERVOS or FULL_UPDATE
-
-					return 4 + servoCount;  // Convert servo count to # of bytes (2 bytes per servo + begin + type + param + check)
-
-				} else {
-
-					return -1;
-
-				}
+				return msgLength;  // PPZ & Debug messages have length as param
 
 			} else {
 
-				return -1; // No valid message types to provide length found
+				return -2; // Bogus message
 
+			}
+
+		} else if(msg->messageBuffer[1] == MTYPE_VAR_SERVOS) {
+		
+			int servoCount = (int)msg->messageBuffer[2];
+
+			if(servoCount < SERVO_COUNT) {  // If we get close to SERVO_COUNT the sent message would be a ALL_SERVOS or FULL_UPDATE
+
+				return 4 + servoCount * 2;  // Convert servo count to # of bytes (2 bytes per servo + begin + type + param + check)
+
+			} else {
+
+				return -2; // Bogus message
 			}
 
 		} else {
 
-			return -1;
+			return -2; // No valid message types to provide length found
 
 		}
 
@@ -1173,8 +1101,6 @@ int getMessageLength(messageState *msg) {
 		return -1; // Haven't read enough bytes yet
 
 	}
-
-	return -1;
 
 }
 
@@ -1244,11 +1170,11 @@ void processMessage(messageState *msg) {
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize) {
 
 	int msgWrote = 0;
-	#if DEBUG_LEVEL == 3
+	#if DEBUG_LEVEL == 6
 	if(message[1] != MTYPE_HEARTBEAT) {
 
 		int x;
-		printf("WRITING[%2d]: ", messageSize);
+		printf("WRITING[%02d]: ", messageSize);
 		for(x = 0 ; x < messageSize ; x++) {
 		
 			printf("%2x ", message[x]);
@@ -1401,7 +1327,6 @@ void sendCtrlUpdate(int signum) {
 
 		int msgSize = 0;
 		int msgType = 0;
-		int tmpData = 0;
 		unsigned char *ctrlMsg;
 		unsigned char msgData[MAX_CTRL_MSG_SZ];
 		// Now figure out the best message type for our counts
@@ -1410,9 +1335,16 @@ void sendCtrlUpdate(int signum) {
 	
 			msgSize = MTYPE_SINGLE_SERVO_SZ;
 			msgType = MTYPE_SINGLE_SERVO;
-			tmpData = (servoUpdateIds[0] << 2) | servoUpdates[0]; // Shift the servo ID (6 bits) left 2 spaces, bitwise OR with the updated servo position (10-bit)
-			msgData[0] = tmpData >> 8;  // Shift that 8 places right to trim off the 2nd byte
-			msgData[1] = tmpData & 255; // Bitwise and with 255, binary 11111111, to get the real good stuffs
+			#if DEBUG_LEVEL == 7
+			printf("Servo[%d] updated to pos: %d\n", servoUpdateIds[0], servoUpdates[0]);
+			#endif
+			msgData[0] = (servoUpdateIds[0] << 2) & 252; // Shift the servo ID (6 bits) left 2 spaces, bitwise and with binary 1111 1100 to drop last 2 bits if they were filled in
+			msgData[0] = msgData[0] | ((servoUpdates[0] >> 8) & 3); // Bitwise and with binary 0000 0011
+			msgData[1] = servoUpdates[0] & 255; // Bitwise and with 255, binary 1111 1111, to get the real good stuffs & discard anything else
+			#if DEBUG_LEVEL == 7
+			printf("msgData[%d]: %2x\n", 0, msgData[0]); // Print hex
+			printf("msgData[%d]: %2x\n", 1, msgData[1]); // Print hex
+			#endif
 
 		} else if(servosChanged > 1 && servosChanged < 8) { // Variable # of servos
 
@@ -1420,11 +1352,20 @@ void sendCtrlUpdate(int signum) {
 			msgType = MTYPE_VAR_SERVOS;
 			msgData[0] = servosChanged;   // Store the # of servos as the first value
 
+			#if DEBUG_LEVEL == 7
+			printf("Updating %d servos\n", servosChanged);
+			#endif
+
 			for(x = 0 ; x < servosChanged ; x++) {
 
-				tmpData = (servoUpdateIds[x] << 2) | servoUpdates[x]; // Bitshift the servo ID (6 bits) to the left 2 spaces, bitwise OR with the updated servo pos
-				msgData[x + 1] = tmpData >> 8; // Shift 8 places to the right to trim off the last 8 bits
-				msgData[x + 2] = tmpData & 255; // Bitwise 255 to get the last 8 bits
+				msgData[(x * 2) + 1] = (servoUpdateIds[x] << 2) & 252; // Shift the servo ID (6 bits) left 2 spaces, bitwise and with binary 1111 1100 to drop last 2 bits if they were filled in
+				msgData[(x * 2) + 1] = msgData[(x * 2) + 1] | ((servoUpdates[x] >> 8) & 3); // Bitwise and with binary 0000 0011
+				msgData[(x * 2) + 2] = servoUpdates[x] & 255; // Bitwise and with 255, binary 1111 1111, to get the real good stuffs & discard anything else
+				#if DEBUG_LEVEL == 7
+				printf("Servo[%d] updated to pos: %d\n", servoUpdateIds[x], servoUpdates[x]);
+				printf("msgData[%d]: %2x\n", x + 1, msgData[(x * 2) + 1]); // Print hex
+				printf("msgData[%d]: %2x\n", x + 2, msgData[(x * 2) + 2]); // Print hex
+				#endif
 
 			}
 
@@ -1433,11 +1374,20 @@ void sendCtrlUpdate(int signum) {
 			msgSize = MTYPE_ALL_SERVOS_SZ;
 			msgType = MTYPE_ALL_SERVOS;
 
+			#if DEBUG_LEVEL == 7
+			printf("Updating all servos\n");
+			#endif
+
 			for(x = 0 ; x < SERVO_COUNT ; x++) {
 			
-				tmpData = (servoUpdateIds[x] << 2) | servoUpdates[x]; // Bitshift the servo ID (6 bits) to the left 2 spaces, bitwise OR with the updated servo pos
-				msgData[(x * 2)] = tmpData >> 8; // Shift 8 places to the right to trim off the last 8 bits
-				msgData[(x * 2) + 1] = tmpData & 255; // Bitwise 255 to get the last 8 bits
+				msgData[(x * 2)] = (servoUpdateIds[x] << 2) & 252; // Shift the servo ID (6 bits) left 2 spaces, bitwise and with binary 1111 1100 to drop last 2 bits if they were filled in
+				msgData[(x * 2)] = msgData[(x * 2)] | ((servoUpdates[x] >> 8) & 3); // Bitwise and with binary 0000 0011
+				msgData[(x * 2) + 1] = servoUpdates[x] & 255; // Bitwise and with 255, binary 1111 1111, to get the real good stuffs & discard anything else
+				#if DEBUG_LEVEL == 7
+				printf("Servo[%d] updated to pos: %d\n", servoUpdateIds[x], servoUpdates[x]);
+				printf("msgData[%d]: %2x\n", x * 2, msgData[(x * 2)]); // Print hex
+				printf("msgData[%d]: %2x\n", (x * 2) + 1, msgData[(x * 2) + 1]); // Print hex
+				#endif
 
 			}
 			
@@ -1463,6 +1413,19 @@ void sendCtrlUpdate(int signum) {
 			}
 
 			ctrlMsg[msgSize - 1] = generateChecksum(ctrlMsg, msgSize - 1); // Store our checksum as our last byte
+
+			#if DEBUG_LEVEL == 7
+			if(msgType != MTYPE_HEARTBEAT && msgType != MTYPE_PING) {
+
+				printf("Final Msg: ");
+				for(x = 0 ; x < msgSize ; x++) {
+	
+					printf("%2x ", ctrlMsg[x]);			
+
+				}
+
+			}
+			#endif 
 
 			writePortMsg(ports.xbeePort, "XBee", ctrlMsg, msgSize); // Write out message to XBee
 			free(ctrlMsg); // Deallocate memory for ctrlMsg	
@@ -1495,19 +1458,26 @@ void sendCtrlUpdate(int signum) {
 	
 	} else {  // We aren't synced up, send ping request
 
-		unsigned char pingMsg[MTYPE_PING_SZ];
-		signalInfo.pingData = rand() % 255; // Ping contains 1 byte that must be sent back as a valid ack
+		signalInfo.pingCounter++;
 
-		pingMsg[0] = MSG_BEGIN;
-		pingMsg[1] = MTYPE_PING;
-		pingMsg[2] = signalInfo.pingData;
-		pingMsg[3] = generateChecksum(pingMsg, MTYPE_PING_SZ - 1); // Store our checksum as the last byte
+		if(signalInfo.pingCounter % 5 == 0) { // Send these out more sparingly than regular updates
 
-		#if DEBUG_LEVEL == 0
-		printf(".");
-		#endif
-		fflush(stdout);
-		writePortMsg(ports.xbeePort, "XBee", pingMsg, MTYPE_PING_SZ);  // Write the handshake to the XBee port
+			unsigned char pingMsg[MTYPE_PING_SZ];
+			signalInfo.pingData = rand() % 255; // Ping contains 1 byte that must be sent back as a valid ack
+			signalInfo.pingCounter = 0;
+
+			pingMsg[0] = MSG_BEGIN;
+			pingMsg[1] = MTYPE_PING;
+			pingMsg[2] = signalInfo.pingData;
+			pingMsg[3] = generateChecksum(pingMsg, MTYPE_PING_SZ - 1); // Store our checksum as the last byte
+	
+			#if DEBUG_LEVEL == 0
+			printf(".");
+			#endif
+			fflush(stdout);
+			writePortMsg(ports.xbeePort, "XBee", pingMsg, MTYPE_PING_SZ);  // Write the handshake to the XBee port
+
+		}
 
 	}
 
@@ -1543,8 +1513,10 @@ int checkSignal(configValues configInfo, jsState *joystickState) {
 			joystickState->rumbleLevel = 0;
 		
 		}
-	
-		if((signalInfo.lastMessageTime - currentTime) > configInfo.timeoutThreshold) {  // Looks like we've lost our signal (>1s since last ping ack)
+
+		double signalTimeDiff = difftime(currentTime, signalInfo.lastMessageTime);
+
+		if(signalTimeDiff > configInfo.timeoutThreshold) {  // Looks like we've lost our signal (>1s since last ping ack)
 
 			signalInfo.handShook = 0;  // Turn off handshake so we can resync
 			signalInfo.lostSignalTime = time(NULL); // Store time we lost the signal
@@ -1564,7 +1536,7 @@ int checkSignal(configValues configInfo, jsState *joystickState) {
 		double signalTimeDiff = difftime(currentTime, signalInfo.lostSignalTime);
 		double rumbleTimeDiff = difftime(currentTime, joystickState->lastRumbleTime);
 		
-		if(signalTimeDiff > 0 && rumbleTimeDiff > 0.5 && joystickState->rumbleLevel < (EFFECTS_COUNT - 1)) {  // Small rumble
+		if(signalTimeDiff > 0.0 && rumbleTimeDiff > 0.5 && joystickState->rumbleLevel < (EFFECTS_COUNT - 1)) {  // Small rumble
 	
 			joystickState->lastRumbleTime = currentTime;
 			
@@ -1578,7 +1550,7 @@ int checkSignal(configValues configInfo, jsState *joystickState) {
 			joystickState->rumbleLevel++;
 			return 0;
 	
-		} else if(signalTimeDiff > 0 && rumbleTimeDiff > 0.5 && joystickState->rumbleLevel == (EFFECTS_COUNT - 1)) {
+		} else if(signalTimeDiff > 0.0 && rumbleTimeDiff > 0.5 && joystickState->rumbleLevel == (EFFECTS_COUNT - 1)) {
 	
 			joystickState->lastRumbleTime = currentTime;	
 			play.type = EV_FF;

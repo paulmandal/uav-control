@@ -9,7 +9,7 @@
 [PPM Interval]
 20000
 [Timeout Threshold]
-1000
+1.0
 [Button State Count]
 0,0,0,0,1,1,0,0,0,0,0,0
 [Context Button]
