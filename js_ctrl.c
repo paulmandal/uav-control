@@ -80,10 +80,10 @@
 #define CAM_PAN_SRC 3         // Camera Pan axis source
 #define CAM_TILT 5            // Camera Tilt axis #
 #define CAM_TILT_SRC 2        // Camera Tilt axis source
-#define ROLL 0                // Roll axis #
-#define PITCH 1               // Pitch axis #
-#define YAW 3                 // Yaw axis #
-#define THROTTLE 2            // Throttle axis #
+#define ROLL 3                // Roll axis #
+#define PITCH 2               // Pitch axis #
+#define YAW 0                 // Yaw axis #
+#define THROTTLE 1            // Throttle axis #
 
 #define SERVO_COUNT   8       // Total servos on airframe
 #define BUTTON_COUNT 12       // Buttons on joystick
@@ -170,7 +170,7 @@ typedef struct _signalState {
 	int localRSSI;		   // Local RSSI
 	int remoteRSSI;		   // Remote RSSI
 	unsigned char pingData;    // Random character sent along with last ping
-	int pingCounter;
+	int ctrlCounter;           // Counter for outbound control messages
 	time_t lostSignalTime;     // Time signal was lost
 	unsigned long totalMsgs;
 
@@ -329,7 +329,7 @@ void initGlobals() {
 	signalInfo.totalMsgs = 0;
 	signalInfo.localRSSI = 0;
 	signalInfo.remoteRSSI = 0;
-	signalInfo.pingCounter = 0;
+	signalInfo.ctrlCounter = 0;
 	signalInfo.lastMessageTime = time(NULL);
 	signalInfo.lostSignalTime = time(NULL);
 	
@@ -688,34 +688,34 @@ void translateJStoAF(jsState joystickState) {
 
 	int x;
 	x = map(joystickState.axis[ROLL], -32767, 32767, 0, 1023);
-	if(x != airframeState.servos[SRV_LEFTWING]) {
+	if(x != airframeState.servos[ROLL]) {
 
-		airframeState.servos_changed[SRV_LEFTWING] = 1;
-		airframeState.servos[SRV_LEFTWING] = x;
+		airframeState.servos_changed[ROLL] = 1;
+		airframeState.servos[ROLL] = x;
 
 	}
 
 	x = map(joystickState.axis[YAW], -32767, 32767, 0, 1023);
-	if(x != airframeState.servos[SRV_RIGHTWING]) {
+	if(x != airframeState.servos[YAW]) {
 
-		airframeState.servos_changed[SRV_RIGHTWING] = 1;
-		airframeState.servos[SRV_RIGHTWING] = x;
+		airframeState.servos_changed[YAW] = 1;
+		airframeState.servos[YAW] = x;
 
 	}
 
 	x = map(joystickState.axis[PITCH], -32767, 32767, 0, 1023);
-	if(x != airframeState.servos[SRV_L_ELEVRON]) {
+	if(x != airframeState.servos[PITCH]) {
 
-		airframeState.servos_changed[SRV_L_ELEVRON] = 1;
-		airframeState.servos[SRV_L_ELEVRON] = x;
+		airframeState.servos_changed[PITCH] = 1;
+		airframeState.servos[PITCH] = x;
 
 	}
 
 	x = map(joystickState.axis[THROTTLE], -32767, 32767, 0, 1023);
-	if(x != airframeState.servos[SRV_R_ELEVRON]) {
+	if(x != airframeState.servos[THROTTLE]) {
 
-		airframeState.servos_changed[SRV_R_ELEVRON] = 1;
-		airframeState.servos[SRV_R_ELEVRON] = x;
+		airframeState.servos_changed[THROTTLE] = 1;
+		airframeState.servos[THROTTLE] = x;
 
 	}
 	/*if(joystickState.axis[ROLL] > 0) {
@@ -957,7 +957,7 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 
 				processMessage(msg);
 				if(msg->messageBuffer[1] != MTYPE_PING) {
-
+										
 					signalInfo.lastMessageTime = time(NULL); // Set last message time, except for from a ping
 
 				}
@@ -1285,6 +1285,8 @@ int testChecksum(unsigned char *message, int length) {
 
 void sendCtrlUpdate(int signum) {
 
+	signalInfo.ctrlCounter++;
+
 	if(signalInfo.handShook) { // We're synced up, send a control update or heartbeat
 
 		// first we figure out what, if anything, changed
@@ -1294,36 +1296,44 @@ void sendCtrlUpdate(int signum) {
 		int servoUpdates[SERVO_COUNT];
 		int x;
 
-		// Gather counts for each type of control that changed
+		if(signalInfo.ctrlCounter % 50 == 0) { // Send a full control update
 
-		for(x = 0 ; x < SERVO_COUNT ; x++) {
+			servosChanged = -1; // Set servosChanged to an impossible value to signal full update
+			signalInfo.ctrlCounter = 0;
 
-			if(airframeState.servos_changed[x]) {
+		} else { // Figure out the best kind of update to send
 
-				servoUpdates[servosChanged] = airframeState.servos[x];
-				servoUpdateIds[servosChanged] = x;
-				servosChanged++;
-				airframeState.servos_changed[x] = 0;
+			// Gather counts for each type of control that changed
+
+			for(x = 0 ; x < SERVO_COUNT ; x++) {
+
+				if(airframeState.servos_changed[x]) {
+
+					servoUpdates[servosChanged] = airframeState.servos[x];
+					servoUpdateIds[servosChanged] = x;
+					servosChanged++;
+					airframeState.servos_changed[x] = 0;
+
+				}
+
+			}
+	
+			x = 0;
+
+			while(x < BUTTON_COUNT) {
+
+				if(airframeState.buttons_changed[x]) {
+
+					sendButtons = 1;
+					airframeState.buttons_changed[x] = 0;
+					x = BUTTON_COUNT;
+	
+				}
+				x++;
 
 			}
 
 		}
-
-		x = 0;
-
-		while(x < BUTTON_COUNT) {
-
-			if(airframeState.buttons_changed[x]) {
-
-				sendButtons = 1;
-				airframeState.buttons_changed[x] = 0;
-				x = BUTTON_COUNT;
-
-			}
-			x++;
-
-		}
-
 
 		int msgSize = 0;
 		int msgType = 0;
@@ -1392,7 +1402,40 @@ void sendCtrlUpdate(int signum) {
 			}
 			
 
-		} else if(servosChanged == 0 && !sendButtons) { // Send only a heartbeat
+		} else if(servosChanged == -1) {
+
+			sendButtons = 0; // Don't send buttons separately
+
+			msgSize = MTYPE_FULL_UPDATE_SZ;
+			msgType = MTYPE_FULL_UPDATE;
+
+			#if DEBUG_LEVEL == 7
+			printf("Sending full update\n");
+			#endif
+
+			for(x = 0 ; x < SERVO_COUNT ; x++) {
+			
+				msgData[(x * 2)] = (x << 2) & 252; // Shift the servo ID (6 bits) left 2 spaces, bitwise and with binary 1111 1100 to drop last 2 bits if they were filled in
+				msgData[(x * 2)] = msgData[(x * 2)] | ((airframeState.servos[x] >> 8) & 3); // Bitwise and with binary 0000 0011
+				msgData[(x * 2) + 1] = airframeState.servos[x] & 255; // Bitwise and with 255, binary 1111 1111, to get the real good stuffs & discard anything else
+				#if DEBUG_LEVEL == 7
+				printf("Servo[%d] updated to pos: %d\n", x, airframeState.servos[x]);
+				printf("msgData[%d]: %2x\n", x * 2, msgData[(x * 2)]); // Print hex
+				printf("msgData[%d]: %2x\n", (x * 2) + 1, msgData[(x * 2) + 1]); // Print hex
+				#endif
+
+			}
+
+			for(x = 0 ; x < MTYPE_BUTTON_UPDATE_SZ - 3 ; x++) {
+	
+				msgData[x + 2 + (SERVO_COUNT * 2)] = (airframeState.buttons[(x * 4)] & 3) << 6; // Mask away anything but the last 2 bits and then bitshift to the left, this button is now now the 2 highest bits
+				msgData[x + 2 + (SERVO_COUNT * 2)] = msgData[x + 2 + (SERVO_COUNT * 2)] | (airframeState.buttons[(x * 4) + 1] & 3) << 4;  // Mask away same, bitshift 4 to the left and bitwise OR to add this to our byte
+				msgData[x + 2 + (SERVO_COUNT * 2)] = msgData[x + 2 + (SERVO_COUNT * 2)] | (airframeState.buttons[(x * 4) + 2] & 3) << 2;  // Same
+				msgData[x + 2 + (SERVO_COUNT * 2)] = msgData[x + 2 + (SERVO_COUNT * 2)] | (airframeState.buttons[(x * 4) + 3] & 3);       // Same, no bitshift since we're already on the last two bits
+
+			}
+
+		} else if(servosChanged == 0 && !sendButtons && signalInfo.ctrlCounter % 25 == 0) { // Send only a heartbeat, 500ms interval
 			
 			msgSize = MTYPE_HEARTBEAT_SZ;
 			msgType = MTYPE_HEARTBEAT;
@@ -1423,7 +1466,7 @@ void sendCtrlUpdate(int signum) {
 					printf("%2x ", ctrlMsg[x]);			
 
 				}
-
+				printf("\n");
 			}
 			#endif 
 
@@ -1458,13 +1501,11 @@ void sendCtrlUpdate(int signum) {
 	
 	} else {  // We aren't synced up, send ping request
 
-		signalInfo.pingCounter++;
-
-		if(signalInfo.pingCounter % 5 == 0) { // Send these out more sparingly than regular updates
+		if(signalInfo.ctrlCounter % 5 == 0) { // Send these out more sparingly than regular updates
 
 			unsigned char pingMsg[MTYPE_PING_SZ];
 			signalInfo.pingData = rand() % 255; // Ping contains 1 byte that must be sent back as a valid ack
-			signalInfo.pingCounter = 0;
+			signalInfo.ctrlCounter = 0;
 
 			pingMsg[0] = MSG_BEGIN;
 			pingMsg[1] = MTYPE_PING;
