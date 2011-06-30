@@ -340,7 +340,7 @@ boolean checkXBeeMessages(messageState *msg) {
 
 				processMessage(msg);
 				if(msg->messageBuffer[1] != MTYPE_PING) {
-
+										
 					lastMessageTime = millis(); // Set last message time, except for from a ping
 
 				}
@@ -580,6 +580,47 @@ void processMessage(messageState *msg) {
 			#endif	
 
 		}
+
+	} else if(msgType == MTYPE_FULL_UPDATE) {
+
+		int servoNum = 0;
+		int servoPos = 0;
+
+		#if DEBUG_LEVEL == 10
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Updating all servos-");
+		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);
+		#endif	
+
+		for(x = 0 ; x < SERVO_COUNT ; x++) {
+
+			servoNum = (msg->messageBuffer[(x * 2) + 2] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
+			servoPos = (msg->messageBuffer[(x * 2) + 2] & B00000011) << 8; // Binary: 0000 0011, strip out servo number, shift top 2 bits of servo pos over
+			servoPos = servoPos | msg->messageBuffer[(x * 2) + 3]; // Store last 8 bits of servo position
+			storePulse(servoNum, servoPos, 0, 1023);
+			servos[servoNum] = servoPos;
+
+			#if DEBUG_LEVEL == 10
+			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Updated Servo[%d] to pos: %d-", servoNum, servoPos);
+			writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);
+			#endif	
+
+		}
+
+		for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
+
+			buttons[(x * 4)] = (msg->messageBuffer[x + (2 + (SERVO_COUNT * 2))] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
+			buttons[(x * 4) + 1] = (msg->messageBuffer[x + (2 + (SERVO_COUNT * 2))] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
+			buttons[(x * 4) + 2] = (msg->messageBuffer[x + (2 + (SERVO_COUNT * 2))] & B00001100) >> 2; // Same
+			buttons[(x * 4) + 3] = (msg->messageBuffer[x + (2 + (SERVO_COUNT * 2))] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
+
+	        }
+
+		#if DEBUG_LEVEL == 10
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Updated buttons-");
+		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);
+		#endif	
+
+		handleButtonUpdate();
 
 	} else if(msgType == MTYPE_BUTTON_UPDATE) {
 
