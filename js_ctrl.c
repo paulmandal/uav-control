@@ -653,6 +653,8 @@ void initAirframe() {
 
 	}
 
+	airframeState.servos[THROTTLE] = 0;
+
 }
 
 /* initRumble() - Initalise rumble effects */
@@ -711,13 +713,20 @@ void translateJStoAF(jsState joystickState) {
 
 	}
 
-	x = map(joystickState.axis[THROTTLE], -32767, 32767, 0, 1023);
-	if(x != airframeState.servos[THROTTLE]) {
+	time_t currentTime = time(NULL);
 
-		airframeState.servos_changed[THROTTLE] = 1;
-		airframeState.servos[THROTTLE] = x;
+	if(difftime(currentTime, startTime) > 20.0) {  // Don't allow throttle to change for first 20 seconds after startup - DEBUG may change this?
 
+		x = map(joystickState.axis[THROTTLE], -32767, 32767, 0, 1023);
+		if(x != airframeState.servos[THROTTLE]) {
+
+			airframeState.servos_changed[THROTTLE] = 1;
+			airframeState.servos[THROTTLE] = x;
+	
+		}
+	
 	}
+
 	/*if(joystickState.axis[ROLL] > 0) {
 
 		if(joystickState.axis[ROLL] < (32767 / 2)) {
