@@ -61,6 +61,7 @@
 #define MTYPE_PPZ            0x09    // PPZ Message
 #define MTYPE_DEBUG          0x10    // Debug message
 #define MTYPE_RESET          0x11    // Reset component (e.g. XBee, GPS)
+#define MTYPE_STATUS	     0x12    // Status message
 
 #define MTYPE_PING_SZ            4    // Message types: Ping
 #define MTYPE_PING_REPLY_SZ      4    // Ping reply
@@ -69,6 +70,7 @@
 #define MTYPE_SINGLE_SERVO_SZ    5    // Single servo
 #define MTYPE_ALL_SERVOS_SZ     19    // Update all servos
 #define MTYPE_BUTTON_UPDATE_SZ   6    // Buttons update
+#define MTYPE_STATUS_SZ		 5    // Status message
 
 #define MAX_CTRL_MSG_SZ         19    // Maximum data size for a control update msg
 
@@ -104,6 +106,8 @@
 
 #define EFFECTS_COUNT 16
 
+double THROTTLE_SAFETY_DEBUG = 10.0;
+
 /* Structures */
 
 typedef struct _jsState {  // Store the axis and button states
@@ -123,8 +127,10 @@ typedef struct _afState { // Store the translated (servo + buttons) states, glob
 
 	unsigned int servos[SERVO_COUNT];
 	unsigned int buttons[BUTTON_COUNT];
-	int servos_changed[SERVO_COUNT];
-	int buttons_changed[BUTTON_COUNT];
+	int prevThrottle;
+	int servosChanged[SERVO_COUNT];
+	int buttonsChanged[BUTTON_COUNT];
+	int batteryVoltage;
 
 } afState;
 
@@ -169,6 +175,7 @@ typedef struct _signalState {
 	int handShook;             // Handshook?
 	int localRSSI;		   // Local RSSI
 	int remoteRSSI;		   // Remote RSSI
+	int videoRSSI;		   // Video downlink RSSI
 	unsigned char pingData;    // Random character sent along with last ping
 	int ctrlCounter;           // Counter for outbound control messages
 	time_t lostSignalTime;     // Time signal was lost
@@ -186,7 +193,7 @@ void initGlobals();
 void initTimer(configValues configInfo);
 void initAirframe();
 void initRumble(jsState *joystickState);
-void translateJStoAF(jsState joystickState);
+void translateJStoAF(jsState joystickState, configValues configInfo);
 void readJoystick(jsState *joystickState, configValues configInfo);
 int initMessage(messageState *message);
 int checkXBeeMessages(int msgPort, messageState *msg);
@@ -202,6 +209,7 @@ void sendAck(messageState *msg);
 void printState(jsState joystickState);
 int map(int value, int inRangeLow, int inRangeHigh, int outRangeLow, int outRangeHigh);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
+void printOutput();
 
 /* Global state storage variables */
 
@@ -263,7 +271,7 @@ int main(int argc, char **argv)
 	}
 
 	initRumble(&joystickState);   // Set up rumble effects
-	initTimer(configInfo); 	// Set up timer (every 20ms)
+	initTimer(configInfo); 	// Set up timers
 	printf("\nPPZ pty file is: %s\n\n", ports.ppzPty.slaveDevice);
 	printf("Ready to read JS & relay for PPZ...\n\n");
 
@@ -277,7 +285,6 @@ int main(int argc, char **argv)
 			#if DEBUG_LEVEL == 1	
 			printf("\n");
 			#endif
-
 			while(!signalInfo.handShook) {  // Handshaking loop
 
 				checkXBeeMessages(ports.xbeePort, &xbeeMsg); // Check for pending msg bytes
@@ -297,7 +304,7 @@ int main(int argc, char **argv)
 
 			readJoystick(&joystickState, configInfo);  // Check joystick for updates
 		
-			translateJStoAF(joystickState);	// update Airframe model
+			translateJStoAF(joystickState, configInfo);	// update Airframe model
 
 			#if DEBUG_LEVEL == 2
 			printState(joystickState); 	// print JS & AF state
@@ -619,25 +626,26 @@ int readConfig(configValues *configInfo) {
 
 }
 
-/* initTimer() - set up pulse timer */
+/* initTimer() - set up timer */
 
 void initTimer(configValues configInfo) {
  
-	struct sigaction sa;
-	struct itimerval timer;
-	
-	printf("Setting up timer..\n");
-	memset(&sa, 0, sizeof (sa));                       // Make signal object
-	sa.sa_handler = &sendCtrlUpdate;                   // Set signal function handler in 'sa'
-	sigaction(SIGALRM, &sa, NULL);                     // Set SIGALRM signal handler
+	struct sigaction saCtrl;
+	struct itimerval timerCtrl;
 
-	timer.it_value.tv_sec = 0;
-	timer.it_value.tv_usec = configInfo.ppmInterval;    // Set timer interval to 20000usec (20ms)
-	timer.it_interval.tv_sec = 0;
-	timer.it_interval.tv_usec = configInfo.ppmInterval; // Set timer reset to 20000usec (20ms)
+	printf("Setting up pulse timer..\n");
+	memset(&saCtrl, 0, sizeof (saCtrl));                       // Make signal object
+	saCtrl.sa_handler = &sendCtrlUpdate;                   // Set signal function handler in 'saCtrl'
+	sigaction(SIGALRM, &saCtrl, NULL);                     // Set SIGALRM signal handler
+
+	timerCtrl.it_value.tv_sec = 0;
+	timerCtrl.it_value.tv_usec = configInfo.ppmInterval;    // Set timer interval to 20000usec / 4 (5ms)
+	timerCtrl.it_interval.tv_sec = 0;
+	timerCtrl.it_interval.tv_usec = configInfo.ppmInterval; // Set timer reset to 20000usec / 4 (5ms)
 
 	printf("Starting pulse timer..\n");
-	setitimer(ITIMER_REAL, &timer, NULL);               // Start the timer
+	setitimer(ITIMER_REAL, &timerCtrl, NULL);               // Start the timer
+
 
 }
 
@@ -654,6 +662,8 @@ void initAirframe() {
 	}
 
 	airframeState.servos[THROTTLE] = 0;
+	airframeState.batteryVoltage = 0;
+	airframeState.prevThrottle = 0;
 
 }
 
@@ -686,13 +696,13 @@ void initRumble(jsState *joystickState) {
 
 /* translateJStoAF() - Translate current joystick settings to airframe settings (e.g. axis -> servos) */
 
-void translateJStoAF(jsState joystickState) {
+void translateJStoAF(jsState joystickState, configValues configInfo) {
 
 	int x;
 	x = map(joystickState.axis[ROLL], -32767, 32767, 0, 1023);
 	if(x != airframeState.servos[ROLL]) {
 
-		airframeState.servos_changed[ROLL] = 1;
+		airframeState.servosChanged[ROLL] = 1;
 		airframeState.servos[ROLL] = x;
 
 	}
@@ -700,7 +710,7 @@ void translateJStoAF(jsState joystickState) {
 	x = map(joystickState.axis[YAW], -32767, 32767, 0, 1023);
 	if(x != airframeState.servos[YAW]) {
 
-		airframeState.servos_changed[YAW] = 1;
+		airframeState.servosChanged[YAW] = 1;
 		airframeState.servos[YAW] = x;
 
 	}
@@ -708,22 +718,56 @@ void translateJStoAF(jsState joystickState) {
 	x = map(joystickState.axis[PITCH], -32767, 32767, 0, 1023);
 	if(x != airframeState.servos[PITCH]) {
 
-		airframeState.servos_changed[PITCH] = 1;
+		airframeState.servosChanged[PITCH] = 1;
 		airframeState.servos[PITCH] = x;
 
 	}
 
 	time_t currentTime = time(NULL);
 
-	if(difftime(currentTime, startTime) > 20.0) {  // Don't allow throttle to change for first 20 seconds after startup - DEBUG may change this?
+	if(difftime(currentTime, startTime) > THROTTLE_SAFETY_DEBUG) {  // Don't allow throttle to change for first 20 seconds after startup - DEBUG may change this?
 
-		x = map(joystickState.axis[THROTTLE], -32767, 32767, 0, 1023);
-		if(x != airframeState.servos[THROTTLE]) {
+		int currentThrottle = joystickState.axis[THROTTLE] * -1;
 
-			airframeState.servos_changed[THROTTLE] = 1;
-			airframeState.servos[THROTTLE] = x;
-	
+		if(currentThrottle < 0) {
+
+			x = map(currentThrottle, -32767, -1 * configInfo.jsDiscardUnder, 0, 1023);
+
+			if(x < airframeState.prevThrottle) {
+
+				airframeState.servosChanged[THROTTLE] = 1;
+				airframeState.servos[THROTTLE] = x;
+				airframeState.prevThrottle = x;
+
+			}
+
+		} else if(currentThrottle > 0) {
+
+			x = map(currentThrottle, configInfo.jsDiscardUnder, 32767, 0, 1023);
+
+			if(x > airframeState.prevThrottle) {
+
+				airframeState.servosChanged[THROTTLE] = 1;
+				airframeState.servos[THROTTLE] = x;
+				airframeState.prevThrottle = x;
+
+			}
+
 		}
+
+/*		x = map(joystickState.axis[THROTTLE] * -1, -32767, 32767, 0, 1023); // Inverse throttle
+
+		if(((joystickState.axis[THROTTLE] * -1) > configInfo.jsDiscardUnder && x > airframeState.prevThrottle) || ((joystickState.axis[THROTTLE] * -1) < (-1 * configInfo.jsDiscardUnder) && x < airframeState.prevThrottle)) {
+
+			if(x != airframeState.servos[THROTTLE]) {
+	
+				airframeState.servosChanged[THROTTLE] = 1;
+				airframeState.servos[THROTTLE] = x;
+				airframeState.prevThrottle = x;
+	
+			}
+	
+		}*/
 	
 	}
 
@@ -793,7 +837,7 @@ void translateJStoAF(jsState joystickState) {
 
 		if(joystickState.button[x] != airframeState.buttons[x]) {
 
-			airframeState.buttons_changed[x] = 1;
+			airframeState.buttonsChanged[x] = 1;
 			airframeState.buttons[x] = joystickState.button[x];
 
 		}
@@ -1065,6 +1109,10 @@ int getMessageLength(messageState *msg) {
 	
 			return MTYPE_FULL_UPDATE_SZ;
 
+		} else if(msg->messageBuffer[1] == MTYPE_STATUS) {
+	
+			return MTYPE_STATUS_SZ;
+
 		}  else {
 
 			return -1; // Probably a parametered type or a bad message
@@ -1170,6 +1218,13 @@ void processMessage(messageState *msg) {
 		
 		}
 		printf("\n");
+	} else if(msgType == MTYPE_STATUS) {
+
+		// get remote RSSI & battery voltage from the message
+
+		signalInfo.remoteRSSI = msg->messageBuffer[2];
+		airframeState.batteryVoltage = msg->messageBuffer[3];
+
 	}
 
 }
@@ -1299,7 +1354,7 @@ void sendCtrlUpdate(int signum) {
 	if(signalInfo.handShook) { // We're synced up, send a control update or heartbeat
 
 		// first we figure out what, if anything, changed
-		int servosChanged = 0;
+		int servosChangedCount = 0;
 		int sendButtons = 0;
 		int servoUpdateIds[SERVO_COUNT];
 		int servoUpdates[SERVO_COUNT];
@@ -1307,7 +1362,7 @@ void sendCtrlUpdate(int signum) {
 
 		if(signalInfo.ctrlCounter % 50 == 0) { // Send a full control update
 
-			servosChanged = -1; // Set servosChanged to an impossible value to signal full update
+			servosChangedCount = -1; // Set servosChangedCount to an impossible value to signal full update
 			signalInfo.ctrlCounter = 0;
 
 		} else { // Figure out the best kind of update to send
@@ -1316,12 +1371,12 @@ void sendCtrlUpdate(int signum) {
 
 			for(x = 0 ; x < SERVO_COUNT ; x++) {
 
-				if(airframeState.servos_changed[x]) {
+				if(airframeState.servosChanged[x]) {
 
-					servoUpdates[servosChanged] = airframeState.servos[x];
-					servoUpdateIds[servosChanged] = x;
-					servosChanged++;
-					airframeState.servos_changed[x] = 0;
+					servoUpdates[servosChangedCount] = airframeState.servos[x];
+					servoUpdateIds[servosChangedCount] = x;
+					servosChangedCount++;
+					airframeState.servosChanged[x] = 0;
 
 				}
 
@@ -1331,10 +1386,10 @@ void sendCtrlUpdate(int signum) {
 
 			while(x < BUTTON_COUNT) {
 
-				if(airframeState.buttons_changed[x]) {
+				if(airframeState.buttonsChanged[x]) {
 
 					sendButtons = 1;
-					airframeState.buttons_changed[x] = 0;
+					airframeState.buttonsChanged[x] = 0;
 					x = BUTTON_COUNT;
 	
 				}
@@ -1350,7 +1405,7 @@ void sendCtrlUpdate(int signum) {
 		unsigned char msgData[MAX_CTRL_MSG_SZ];
 		// Now figure out the best message type for our counts
 
-		if(servosChanged == 1) { // Single servo update
+		if(servosChangedCount == 1) { // Single servo update
 	
 			msgSize = MTYPE_SINGLE_SERVO_SZ;
 			msgType = MTYPE_SINGLE_SERVO;
@@ -1365,17 +1420,17 @@ void sendCtrlUpdate(int signum) {
 			printf("msgData[%d]: %2x\n", 1, msgData[1]); // Print hex
 			#endif
 
-		} else if(servosChanged > 1 && servosChanged < 8) { // Variable # of servos
+		} else if(servosChangedCount > 1 && servosChangedCount < 8) { // Variable # of servos
 
-			msgSize = 4 + (2 * servosChanged); // msgSize = 3 for header, 2 bytes each servo (10-bit pos + 6-bit servo number)
+			msgSize = 4 + (2 * servosChangedCount); // msgSize = 3 for header, 2 bytes each servo (10-bit pos + 6-bit servo number)
 			msgType = MTYPE_VAR_SERVOS;
-			msgData[0] = servosChanged;   // Store the # of servos as the first value
+			msgData[0] = servosChangedCount;   // Store the # of servos as the first value
 
 			#if DEBUG_LEVEL == 7
-			printf("Updating %d servos\n", servosChanged);
+			printf("Updating %d servos\n", servosChangedCount);
 			#endif
 
-			for(x = 0 ; x < servosChanged ; x++) {
+			for(x = 0 ; x < servosChangedCount ; x++) {
 
 				msgData[(x * 2) + 1] = (servoUpdateIds[x] << 2) & 252; // Shift the servo ID (6 bits) left 2 spaces, bitwise and with binary 1111 1100 to drop last 2 bits if they were filled in
 				msgData[(x * 2) + 1] = msgData[(x * 2) + 1] | ((servoUpdates[x] >> 8) & 3); // Bitwise and with binary 0000 0011
@@ -1388,7 +1443,7 @@ void sendCtrlUpdate(int signum) {
 
 			}
 
-		} else if(servosChanged > 7) { // All servos update
+		} else if(servosChangedCount > 7) { // All servos update
 
 			msgSize = MTYPE_ALL_SERVOS_SZ;
 			msgType = MTYPE_ALL_SERVOS;
@@ -1411,7 +1466,7 @@ void sendCtrlUpdate(int signum) {
 			}
 			
 
-		} else if(servosChanged == -1) {
+		} else if(servosChangedCount == -1) {
 
 			sendButtons = 0; // Don't send buttons separately
 
@@ -1444,7 +1499,7 @@ void sendCtrlUpdate(int signum) {
 
 			}
 
-		} else if(servosChanged == 0 && !sendButtons && signalInfo.ctrlCounter % 25 == 0) { // Send only a heartbeat, 500ms interval
+		} else if(servosChangedCount == 0 && !sendButtons && signalInfo.ctrlCounter % 25 == 0) { // Send only a heartbeat, 500ms interval
 			
 			msgSize = MTYPE_HEARTBEAT_SZ;
 			msgType = MTYPE_HEARTBEAT;
@@ -1557,7 +1612,9 @@ int checkSignal(configValues configInfo, jsState *joystickState) {
 	time_t currentTime = time(NULL); // get current time
 
 	if(signalInfo.handShook) { 
-	
+
+		printOutput();
+
 		if(joystickState->rumbleLevel == EFFECTS_COUNT - 1) {
 		
 			joystickState->rumbleLevel = 0;
@@ -1626,7 +1683,7 @@ int checkSignal(configValues configInfo, jsState *joystickState) {
 void printState(jsState joystickState) {
 
 	int i;
-	printf("\r");
+	printf("\033[2J\033[0;0H");
 
 	if(joystickState.axes) {
 	printf("Axes: ");
@@ -1676,6 +1733,47 @@ char *fgetsNoNewline(char *s, int n, FILE *stream) {
 	} else {
 
 		return NULL;
+
+	}
+
+}
+
+void printOutput() {
+
+	time_t currentTime = time(NULL);
+
+	if(difftime(currentTime, startTime) > (THROTTLE_SAFETY_DEBUG / 2.0)) {
+
+		int x;
+		printf("\033[2J\033[0;0H");
+
+		printf("Joystick State: \n");
+
+		printf("Button State:   \n");
+
+		printf("Servo State:    ");
+
+		for(x = 0 ; x < SERVO_COUNT ; x++) {
+
+			printf("[%02d]: %4d  ", x, airframeState.servos[x] + 1);
+
+		}
+	
+		printf("\n");
+
+		printf("RSSI: %3d   Battery: %3d\n", signalInfo.remoteRSSI, airframeState.batteryVoltage);
+
+		time_t currentTime = time(NULL);
+		double diff = difftime(currentTime, startTime);
+
+		if(diff < THROTTLE_SAFETY_DEBUG) {
+
+			printf("Throttle Safety Remaining: %3.0f\n", THROTTLE_SAFETY_DEBUG - diff);
+
+		}
+
+
+		fflush(stdout);
 
 	}
 
