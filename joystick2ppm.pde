@@ -41,10 +41,14 @@
 #define DEBUG_PIN1     4 // Pin for debug signaling
 #define STATUS_LED_PIN 0 // Status LED pin
 #define NAVLIGHT_PIN  18 // Navigation light pin  
+#define RSSI_PIN      15 // RSSI test
+#define BATTERY_PIN   16 // Battery voltage test
 #else
 #define DEBUG_PIN1     12 // Pin for debug signaling   
 #define STATUS_LED_PIN 13 // Status LED pin
 #define NAVLIGHT_PIN   11 // Navigation light pin  
+#define RSSI_PIN       A1 // RSSI test
+#define BATTERY_PIN    A2 // Battery voltage test
 #endif
 
 #define NAV_LIGHT    1
@@ -68,6 +72,7 @@
 #define MTYPE_PPZ            0x09    // PPZ Message
 #define MTYPE_DEBUG          0x10    // Debug message
 #define MTYPE_RESET          0x11    // Reset component (e.g. XBee, GPS)
+#define MTYPE_STATUS	     0x12    // Status message
 
 #define MTYPE_PING_SZ            4    // Message types: Ping
 #define MTYPE_PING_REPLY_SZ      4    // Ping reply
@@ -76,6 +81,7 @@
 #define MTYPE_SINGLE_SERVO_SZ    5    // Single servo
 #define MTYPE_ALL_SERVOS_SZ     19    // Update all servos
 #define MTYPE_BUTTON_UPDATE_SZ   6    // Buttons update
+#define MTYPE_STATUS_SZ		 5    // Status message
 
 #define MSG_BUFFER_SIZE       256
 #define LOST_MSG_THRESHOLD 1000UL    // How long without legit msg before handShook gets unset
@@ -107,9 +113,11 @@ unsigned int servos[SERVO_COUNT];        // store servo states
 unsigned int buttons[BUTTON_COUNT];      // store button states
 
 boolean handShook = false;
+boolean firstSignalEstablished = false;
 unsigned char pingData;
 unsigned long lastMessageTime = -1UL * LOST_MSG_THRESHOLD; // Time of last legit message, -100 initially so the PPM won't turn on until we get a real message
 unsigned long lastMessageSentTime = 0UL;
+int ctrlCounter = 0;
 
 ledBlinker lights[FLASHING_LIGHTS];  // blinking lights state
 
@@ -135,7 +143,7 @@ byte buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, -1, -1, -1, 7, 8, 10, A0};
 
 void setup() {
 
-	randomSeed(analogRead(0));          // Seed our random number gen with an unconnected pins static
+	randomSeed(analogRead(0));          // Seed our random number gen with an unconnected pin's static
 	initControlState();                 // Initialise control state
 	initOutputs();                      // Initialise outputs
 	initPPM();                          // Set default PPM pulses
@@ -444,6 +452,10 @@ int getMessageLength(messageState *msg) {
 	
 			return MTYPE_FULL_UPDATE_SZ;
 
+		} else if(msg->messageBuffer[1] == MTYPE_STATUS) {
+	
+			return MTYPE_STATUS_SZ;
+
 		}  else {
 
 			return -1; // Probably a parametered type or a bad message
@@ -503,6 +515,7 @@ void processMessage(messageState *msg) {
 	if(msgType == MTYPE_PING) { // We got a ping, send an ack
 
 		sendAck(msg);
+		firstSignalEstablished = true;
 
 	} else if(msgType == MTYPE_PING_REPLY) {  // Handle the message, since it got past checksum it has to be legit
 
@@ -736,6 +749,30 @@ void sendHeartbeat() {
 
 }
 
+/* sendStatus() - Send status */
+
+void sendStatus() {
+
+	unsigned char status[MTYPE_STATUS_SZ];
+	unsigned int voltage = 0;
+	unsigned int rssi = 0;
+
+	rssi = analogRead(RSSI_PIN);
+	rssi = map(rssi, 0, 1023, 0, 255);
+	voltage = analogRead(BATTERY_PIN);
+	voltage = map(voltage, 0, 1023, 0, 255);
+
+	status[0] = MSG_BEGIN;
+	status[1] = MTYPE_STATUS;
+	status[2] = rssi;
+	status[3] = voltage;
+	status[4] = generateChecksum(status, MTYPE_STATUS_SZ - 1); // Store our checksum as the last byte
+	
+	Serial.write(status, MTYPE_STATUS_SZ);     // Send the status
+	lastMessageSentTime = millis();
+
+}
+
 /* sendPing() - Send ping! */
 
 void sendPing() {
@@ -849,7 +886,18 @@ void handleSignal() {
 
 			if((currentTime - lastMessageSentTime) > HEARTBEAT_INTERVAL) {
 
-				sendHeartbeat();
+				if(ctrlCounter % 3 == 0) { // Send a status message instead of every 3rd heartbeat
+	
+					ctrlCounter = 0;
+					sendStatus();
+
+				} else {
+
+					sendHeartbeat();
+
+				}
+
+				ctrlCounter++;
 
 			}
 
@@ -892,10 +940,14 @@ void handleSignal() {
 
 	} else {
 
-		if((currentTime - lastMessageSentTime) > PING_INTERVAL) { // Signal is bad, send a ping to try restore connection
+		if(firstSignalEstablished) {
 
-			sendPing(); 
+			if((currentTime - lastMessageSentTime) > PING_INTERVAL) { // Signal is bad, send a ping to try restore connection
 
+				sendPing(); 
+
+			}
+	
 		}
     
 	}
