@@ -7,10 +7,12 @@
 [Joystick Discard Threshold]
 5000
 [PPM Interval]
-20000
+20
 [Timeout Threshold]
-1.0
+1000
 [Button State Count]
 0,0,0,0,1,1,0,0,0,0,0,0
 [Context Button]
 5
+[Heartbeat Interval]
+500
