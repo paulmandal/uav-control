@@ -1,10 +1,9 @@
 #define SERVO_COUNT 8
 #define SIGNAL_PIN 13
-#define SERVO_MAX_DEG 180
 #define THROTTLE_SERVO 1
-#define FIRST_SERVO_PIN 2
 
 int servoValues[SERVO_COUNT];
+int servoPins[SERVO_COUNT] = {2, 3, 4, 5, 6, 7, 9};
 int currentPulse;
 int currentPulseOut;
 
@@ -27,13 +26,13 @@ void setup() {
 	currentPulse = 0;
 	currentPulseOut = 0;
 
-        int x;
+        int x, y;
         
 	Serial.print("Servo init..");       
 
-	for(x = 0 ; x < SERVO_COUNT - 2 ; x++) {
+	for(x = 0 ; x < SERVO_COUNT ; x++) {
 
-		pinMode(x + FIRST_SERVO_PIN, OUTPUT);
+		pinMode(servoPins[x], OUTPUT);
 
 	}
 
@@ -41,11 +40,11 @@ void setup() {
           
                   if(x != THROTTLE_SERVO) {
                     
-			servoValues[x] = 1500;			
+			servoValues[x] = 3000;			
         
                   } else {
 
-			servoValues[x] = 1000;
+			servoValues[x] = 2000;
                     
                   }
           
@@ -53,16 +52,16 @@ void setup() {
 
 	// Set up timer1 - ICP1 input pulse
 
-	TIMSK1 = B00100000; // Input capture interrupt enabled
+	TIMSK1 = B00100010; // Input capture interrupt enabled, OCR1A = TCNT1 interrupt enabled
 	TCCR1A = B00000000; // Normal mode
 	TCCR1B = B11000010; // Clock prescaler / 8, rising edge in ICP1 = interrupt
 
-	// Set up timer2 - Servo output control
+	/*// Set up timer2 - Servo output control
 
 	TIMSK2 = B00000010; // Interrupt on OCR2A = TCNT2
 	TCCR2A = B00000010; // CTC mode
 	TCCR2B = B00000101; // CTC mode, /128 prescaler, 8 usec interval
-	OCR2A = 250; // execute after 500usec
+	OCR2A = 250; // execute after 500usec*/
 
 	Serial.println(".done.. 5s delay.");
 	for(x = 0 ; x < 10 ; x++) {
@@ -70,6 +69,23 @@ void setup() {
 		digitalWrite(SIGNAL_PIN, light);
 		light = !light;
 
+	       	for(y = 0 ; y < SERVO_COUNT ; y++) { // wiggle them servos
+          
+			if(y != THROTTLE_SERVO) {
+                    
+				if(x % 2 == 0) {
+
+					servoValues[y] = 2800;			
+
+				} else {
+
+					servoValues[y] = 3200;			
+
+				}
+	        
+	        	}
+	          
+       		}
 		delay(500);
 
 	}
@@ -122,10 +138,9 @@ ISR(TIMER1_CAPT_vect) {
 		
 		} else {
 
-			timeDiff = timeDiff / 2;
-			if(timeDiff > 950) {
+			if(timeDiff > 1900) {
 
-				if(abs(servoValues[currentPulse] - timeDiff) > 4) {
+				if(abs(servoValues[currentPulse] - timeDiff) > 8) {
 
 					servoValues[currentPulse] = timeDiff;
 
@@ -147,23 +162,21 @@ ISR(TIMER1_CAPT_vect) {
 
 }
 
-ISR(TIMER2_COMPA_vect) {
+ISR(TIMER1_COMPA_vect) {
 
 	if(servoPulse) { // We've hit OCR2A in servoPulse mode (8 usec interval, TOP = turn off pulse)
 
-		digitalWrite(currentPulseOut + FIRST_SERVO_PIN, LOW); // Turn off previous servo pin
+		digitalWrite(servoPins[currentPulseOut], LOW); // Turn off previous servo pin
 		currentPulseOut++;
 		
-		if(currentPulseOut < SERVO_COUNT - 2) {
+		if(currentPulseOut < SERVO_COUNT) {
 
-			OCR2A = servoValues[currentPulseOut] / 8;
-			digitalWrite(currentPulseOut + FIRST_SERVO_PIN, HIGH);
-			TCNT2 = 0;
+			OCR1A = TCNT1 + servoValues[currentPulseOut];
+			digitalWrite(servoPins[currentPulseOut], HIGH);
 
 		} else { // Go to sleep.. mode
 
-			OCR2A = 255;
-			TCNT2 = 0;
+			OCR1A = TCNT1 + 4000;
 			servoPulse = false;
 
 		}
@@ -173,9 +186,8 @@ ISR(TIMER2_COMPA_vect) {
 		servoPulse = true; // Set servoPulse = true so we execute the watcher code next time
 
 		currentPulseOut = 0;
-		OCR2A = servoValues[currentPulseOut] / 8; // 1 x 8usec, servoValue is in usec to /8 to get ticks
-		digitalWrite(FIRST_SERVO_PIN, HIGH); // Turn on first servo pin
-		TCNT2 = 0;
+		OCR1A = TCNT1 + servoValues[currentPulseOut];
+		digitalWrite(servoPins[currentPulseOut], HIGH); // Turn on first servo pin
 
 	}
 
