@@ -3,16 +3,16 @@
 struct messageState {
 
 	unsigned char *messageBuffer;
-	int readBytes;
-	int length;
+	byte readBytes;
+	byte length;
 
 };
 
 struct ledBlinker {
   
   unsigned int interval; // interval == 0 is always on, interval < 0 is always off, interval > 0 is an interval
-  int pin;
-  int state;
+  byte pin;
+  boolean state;
   unsigned long lastChanged;
   
 };
