@@ -1781,7 +1781,7 @@ int limitLines(char *buffer, int maxLines) {
 
 		if(buffer[x] == '\n') { // Found the end of a line
 
-			offset = x;  // Store the offset
+			offset = x + 1;  // Store the offset
 
 			for(x =  0 ; x < length ; x++) {
 
@@ -1858,15 +1858,15 @@ void printOutput() {
 
 		}
 
-		printf("Joystick State: ");
+		printf("                  ");
 
-		for(x = 0 ; x < joystickState.axes ; x++) {
+		for(x = 0 ; x < BUTTON_COUNT ; x++) {
 
 			printf("  [%2d]  ", x);
 
 		}
 
-		printf("\n                ");
+		printf("\nJoystick State:   ");
 
 		for (x = 0; x < joystickState.axes ; x++) {
 		
@@ -1874,41 +1874,14 @@ void printOutput() {
 
 		}
 		printf("\n");
-		for(x = 0 ; x < cols ; x++) {
-
-			printf("-");
-
-		}
-		printf("\n");
-
-		printf("Servo State:    ");
-		for(x = 0 ; x < SERVO_COUNT ; x++) {
-
-			printf("  [%2d]  ", x);
-
-		}
-		printf("\n                ");
+		printf("Servo State:      ");
 		for(x = 0 ; x < SERVO_COUNT ; x++) {
 
 			printf("  %4d  ", airframeState.servos[x] + 1);  // Print all airframe servos
 
 		}
 		printf("\n");
-		for(x = 0 ; x < cols ; x++) {
-
-			printf("-");
-
-		}	
-		printf("\n");
-
 		printf("Button State:   ");
-		for(x = 0 ; x < BUTTON_COUNT ; x++) {
-
-			printf("  [%2d]  ", x);
-
-		}
-		printf("\n              ");
-
 		for(x = 0 ; x < BUTTON_COUNT ; x++) {
 
 			printf("      %2d", airframeState.buttons[x]);  // Print all button states
