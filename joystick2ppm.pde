@@ -22,70 +22,34 @@
 
 /* Including things */
 
+#include "WProgram.h" 
 #include "joystickRC_structs.h"
 
 /* This is the defining moment of the file */
 
-#define DEBUG_LEVEL 0   // 1 - Messaging debugging
-                        // 2 - Servo / pin output
-                        // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
-                        // 4 - Signal continuity (with serial output)
-                        // 5 - PPM registers
-                        // 6 - PPM pulse values
-                        // 7 - Only start debug message
-                        // 8 - Report bad checksums
-			// 9 - Report good and bad checksums
-			// 10 - Processing debug
+#define DEBUG_LEVEL 0            // 1 - Messaging debugging
+                                 // 2 - Servo / pin output
+                                 // 3 - Signal continuity debugging (light 4 stays on if signal is ever lost)
+                                 // 4 - Signal continuity (with serial output)
+                                 // 5 - PPM registers
+                                 // 6 - PPM pulse values
+                                 // 7 - Only start debug message
+                                 // 8 - Report bad checksums
+			         // 9 - Report good and bad checksums
+		           	 // 10 - Processing debug
 
-#ifdef __AVR_ATmega644P__
-#define DEBUG_PIN1           4 // Pin for debug signaling
-#define STATUS_LED_PIN       0 // Status LED pin
-#define NAVLIGHT_PIN        18 // Navigation light pin  
-#define RSSI_PIN            15 // RSSI test
-#define MAIN_BATTERY_PIN    16 // Battery voltage test
-#define COMM_BATTERY_PIN    16 // Battery voltage test
-#define VIDEO_BATTERY_PIN   16 // Battery voltage test
-#else
-#define DEBUG_PIN1          12 // Pin for debug signaling   
-#define STATUS_LED_PIN      13 // Status LED pin
-#define NAVLIGHT_PIN        11 // Navigation light pin  
-#define RSSI_PIN            A1 // RSSI test
-#define MAIN_BATTERY_PIN    A2 // Battery voltage test
-#define COMM_BATTERY_PIN    A3 // Battery voltage test
-#define VIDEO_BATTERY_PIN   A4 // Battery voltage test
-#endif
+#define VERSION_MAJOR          3 // Major version #
+#define VERSION_MINOR          2 // Minor #
+#define VERSION_MOD            1 // Mod #
+#define VERSION_TAG        "DBG" // Tag
 
-#define NAV_LIGHT    1
-#define STATUS_LIGHT 0
-#define FLASHING_LIGHTS 2
+#define FLASHING_LIGHTS        2 // Number of flashing lights our board has
 
-#define VERSION_MAJOR 3     // Major version #
-#define VERSION_MINOR 2     // Minor #
-#define VERSION_MOD   1     // Mod #
-#define VERSION_TAG   "DBG" // Tag
+#define MSG_BUFFER_SIZE      256 // Message buffer size in bytes
 
-#define MSG_BUFFER_SIZE       256
-#define LOST_MSG_THRESHOLD 1000UL    // How long without legit msg before handShook gets unset
-#define HEARTBEAT_INTERVAL  500UL    // 500ms
-#define PING_INTERVAL       100UL    // 100ms
-#define PPZ_MSG_HEADER_SIZE     3    // PPZ msg header size in bytes
+#define PPZ_MSG_HEADER_SIZE    3 // PPZ msg header size in bytes
 
-#define SERVO_COUNT   8     // # of servos
-#define BUTTON_COUNT 12     // # of buttons on controller
-
-#define PPM_MIN_PULSE 2000  // Min pulse length (1ms)
-#define PPM_MAX_PULSE 4000  // Max pulse length (2ms)
-#define PPM_HIGH_PULSE 400  // Delay between pulses (200us)
-#define PPM_FREQUENCY 40000 // Frequency of PPM frame (20ms)
-#define PPM_PULSES ((SERVO_COUNT * 2) + 2)  // How many pulses are there in the whole PPM (One 220us HIGH per servo, then 1ms-2ms LOW for servo pos, then 220us HIGH for pulse, then PPM_SYNC_PULSE LOW)
-#define PPM_SYNC_PULSE (PPM_FREQUENCY - (SERVO_COUNT * (((PPM_MAX_PULSE + PPM_MIN_PULSE) / 2) + PPM_HIGH_PULSE))) // Duration of sync pulse
-
-#define STATUS_INTERVAL_SIGNAL_LOST 100 // Toggle every 100ms
-#define STATUS_INTERVAL_OK 1000         // Toggle every 1s
-
-#define NAV_LIGHT_INTERVAL 1000          // Toggle every 1s
-
-/* Numbers */
+/* Important Numbers */
 
 typedef enum _messageTypes {
 
@@ -106,25 +70,25 @@ typedef enum _messageTypes {
 
 } messageTypes;
 
-byte messageSizes[] = {1, 4, 4, 3, 22, 5, 0, 19, 6, 0, 0, 0, 7, 16};
+typedef enum _lightPins {
+
+	NAV_LIGHT = 0,
+	STATUS_LIGHT
+
+} lightPins;
+
+byte messageSizes[] = {1, 4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 7, -1};
 
 /* Various varibles to hold state info */
 
-unsigned int servos[SERVO_COUNT];        // store servo states
-unsigned int buttons[BUTTON_COUNT];      // store button states
-
-boolean handShook = false;
-boolean firstSignalEstablished = false;
-unsigned char pingData;
-unsigned long lastMessageTime = -1UL * LOST_MSG_THRESHOLD; // Time of last legit message, -100 initially so the PPM won't turn on until we get a real message
-unsigned long lastMessageSentTime = 0UL;
-byte ctrlCounter = 0;
+unsigned int *servos;       // store servo states
+unsigned int *buttons;      // store button states
 
 ledBlinker lights[FLASHING_LIGHTS];  // blinking lights state
 
-byte currentPulse = 0;        // The pulse being sent
-boolean ppmON = false;
-int pulses[PPM_PULSES];        // PPM pulses
+configValues configInfo;   // Configuration
+ppmState      ppmInfo;     // PPM state info
+signalState   signalInfo;  // Signal state info
 
 messageState xbeeMsg;  // Message struct for messages from XBee line
 #ifdef __AVR_ATmega644P__
@@ -135,9 +99,7 @@ messageState dbgMsg;  // Message struct for outgoing debug messages
 #endif
 
 #ifdef __AVR_ATmega644P__
-byte buttonPinMap[BUTTON_COUNT] = {1, 2, 3, 4, 5, -1, -1, 6, 7, 12, 14};
-#else
-byte buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, -1, -1, -1, 7, 8, 10, A0};
+
 #endif
 
 /* Setup function */
@@ -145,9 +107,8 @@ byte buttonPinMap[BUTTON_COUNT] = {2, 3, 4, 5, -1, -1, -1, 7, 8, 10, A0};
 void setup() {
 
 	randomSeed(analogRead(0));          // Seed our random number gen with an unconnected pin's static
-	initControlState();                 // Initialise control state
-	initOutputs();                      // Initialise outputs
-	initPPM();                          // Set default PPM pulses
+	initSignal();
+	initLights();
 	initMessage(&xbeeMsg);              // Init our XBee message
 	#ifdef __AVR_ATmega644P__
 	initMessage(&ppzMsg);               // Init our PPZ message
@@ -178,7 +139,7 @@ void setup() {
 
 void loop() {
 
-	int x;
+	byte x;
 	// keep track of last time we send a heartbeat
 	updateLights();        // Check if we need to update any lights
 
@@ -197,21 +158,50 @@ void loop() {
 
 /* Function definitions */
 
+/* initSignal() - Initialise signal info */
+
+void initSignal() {
+
+	signalInfo.handShook = false;
+	signalInfo.firstSignalEstablished = false;
+	signalInfo.pingData = 0;
+	signalInfo.lastMessageTime = -1000UL; // Time of last legit message, -100 initially so the PPM won't turn on until we get a real message
+	signalInfo.lastMessageSentTime = 0UL;
+	signalInfo.ctrlCounter = 0;
+
+}
+
+/* freeMemory() - Free up memory */
+
+void freeMemory() {
+
+	free(servos);
+	free(buttons);
+	free(configInfo.buttonPinMap);
+	free(ppmInfo.pulses);
+
+}
+
 /* initControlState() - Zeroes out everythang */
 
 void initControlState() {
 
-	int x;
+	// Allocate memory for servos and buttons
+
+	servos = (unsigned int*)calloc(configInfo.servoCount, sizeof(int));
+	buttons = (unsigned int*)calloc(configInfo.buttonCount, sizeof(int));
+
+	byte x;
 
   	// Zero out all buttons and servos
 
-	for(x = 0 ; x < SERVO_COUNT ; x++) {
+	for(x = 0 ; x < configInfo.servoCount ; x++) {
 
 		servos[x] = 0;
 
 	}
 
-	for(x = 0 ; x < BUTTON_COUNT ; x++) {
+	for(x = 0 ; x < configInfo.buttonCount ; x++) {
 
 		buttons[x] = 0;
 
@@ -224,25 +214,43 @@ void initControlState() {
 void initPPM() {
 
 	byte x;
-	int midPPMPulse = (PPM_MIN_PULSE + PPM_MAX_PULSE) / 2;  
+	int midPPMPulse = (configInfo.ppmMinPulse + configInfo.ppmMaxPulse) / 2;  
+	ppmInfo.pulses = (int*)calloc(configInfo.ppmPulses, sizeof(int));
 
-	for (x = 0 ; x < (SERVO_COUNT + 1) ; x++) {
+	for (x = 0 ; x < (configInfo.servoCount + 1) ; x++) {
     
-		pulses[x * 2] = PPM_HIGH_PULSE;  // DEBUG
-		pulses[(x * 2) + 1] = midPPMPulse; // Set all PPM pulses to halfpulse
+		ppmInfo.pulses[x * 2] = configInfo.ppmHighPulse;
+		ppmInfo.pulses[(x * 2) + 1] = midPPMPulse;       // Set all PPM pulses to halfpulse
     
 	}
-	pulses[PPM_PULSES - 1] = PPM_SYNC_PULSE; // Sync pulse is before 0 length pulse
+
+	ppmInfo.pulses[configInfo.ppmPulses - 1] = configInfo.ppmSyncPulse; // Sync pulse is before 0 length pulse
 
 	#if DEBUG_LEVEL == 5
-	for(x = 0 ; x < PPM_PULSES ; x++) {
+	for(x = 0 ; x < configInfo.ppmPulses ; x++) {
    
 		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Pulse[%d]: %d -", x, pulses[x]); // Build debug message
 		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                              // Write debug message
     
 	}
 	#endif
-	currentPulse = 0; // init currentPulse
+	ppmInfo.currentPulse = 0; // init currentPulse
+	ppmInfo.ppmON = false;
+
+}
+
+/* initLights - Set up lights */
+
+void initLights () {
+
+	byte x;        
+
+        for(x = 0 ; x < FLASHING_LIGHTS ; x++) {
+  
+		lights[x].interval = -1; // Turn light off
+		lights[x].pin = -1;  // Disable light pin
+
+        }
 
 }
 
@@ -252,32 +260,32 @@ void initOutputs() {
 
   	byte x;
   	
-  	for(x = 0 ; x < BUTTON_COUNT ; x++) {
+  	for(x = 0 ; x < configInfo.buttonCount ; x++) {
   	
-  		if(buttonPinMap[x] > 0) {
+  		if(configInfo.buttonPinMap[x] > 0 && configInfo.buttonPinMap[x] < 128) {
   		
-  			pinMode(buttonPinMap[x], OUTPUT);
+  			pinMode(configInfo.buttonPinMap[x], OUTPUT);
   		
   		}
   	
   	}
   
-        lights[NAV_LIGHT].pin = NAVLIGHT_PIN;
+        lights[NAV_LIGHT].pin = configInfo.navlightPin;
         lights[NAV_LIGHT].state = false;
         lights[NAV_LIGHT].lastChanged = 0;
         lights[NAV_LIGHT].interval = -1;
         
-        lights[STATUS_LIGHT].pin = STATUS_LED_PIN;
+        lights[STATUS_LIGHT].pin = configInfo.statusLEDPin;
         lights[STATUS_LIGHT].state = false;
         lights[STATUS_LIGHT].lastChanged = 0;
-        lights[STATUS_LIGHT].interval = STATUS_INTERVAL_SIGNAL_LOST;
-        
-        for(x = 0 ; x < FLASHING_LIGHTS ; x++) {
-  
-	    pinMode(lights[x].pin, OUTPUT); // Mark pin as output
+        lights[STATUS_LIGHT].interval = configInfo.statusIntervalSignalLost;
 
-        }
-  
+	for(x = 0 ; x < FLASHING_LIGHTS ; x++) {
+
+		pinMode(lights[x].pin, OUTPUT);
+
+	}
+ 
 }
 
 /* initMessage() - Initialise message */
@@ -350,7 +358,7 @@ boolean checkXBeeMessages(messageState *msg) {
 				processMessage(msg);
 				if(msg->messageBuffer[1] != MTYPE_PING) {
 										
-					lastMessageTime = millis(); // Set last message time, except for from a ping
+					signalInfo.lastMessageTime = millis(); // Set last message time, except for from a ping
 
 				}
 
@@ -431,15 +439,7 @@ int getMessageLength(messageState *msg) {
 		
 		byte size = messageSizes[msg->messageBuffer[1]];
 
-		if(size > 0) {
-
-			return size; // We got the message size
-
-		} else {
-
-			return -1; // Probably a parametered type
-
-		}
+		return -1; // Size will be the message size or -1 for parametered types
 
 	} else if(msg->readBytes > 2) { // Didn't find any non-parameter message types, let's see if we have a parametered one
 
@@ -458,15 +458,28 @@ int getMessageLength(messageState *msg) {
 
 		} else if(msg->messageBuffer[1] == MTYPE_VAR_SERVOS) {
 		
-			byte servoCount = msg->messageBuffer[2];
+			byte numServos = msg->messageBuffer[2];
 
-			if(servoCount < SERVO_COUNT) {  // If we get close to SERVO_COUNT the sent message would be a ALL_SERVOS or FULL_UPDATE
+			if(numServos < configInfo.servoCount) {  // If we get close to configInfo.servoCount the sent message would be a ALL_SERVOS or FULL_UPDATE
 
-				return 4 + servoCount * 2;  // Convert servo count to # of bytes (2 bytes per servo + begin + type + param + check)
+				return 4 + numServos * 2;  // Convert servo count to # of bytes (2 bytes per servo + begin + type + param + check)
 
 			} else {
 
 				return -2; // Bogus message
+			}
+
+		} else if(msg->messageBuffer[1] == MTYPE_CONFIG) {
+
+			byte msgLength = msg->messageBuffer[2];
+			if(msgLength < MSG_BUFFER_SIZE) {
+
+				return msgLength; 
+
+			} else {
+
+				return -2; // We shouldn't get messages larger than we can handle
+
 			}
 
 		} else {
@@ -483,6 +496,77 @@ int getMessageLength(messageState *msg) {
 
 }
 
+boolean readConfig(messageState *msg) {
+
+	// Plunder the message for values
+
+     	configInfo.debugPin                 = msg->messageBuffer[3];		                             	                  // Pin for debug LED
+	configInfo.statusLEDPin             = msg->messageBuffer[4];          	                               	                  // Pin for status LED
+	configInfo.navlightPin              = msg->messageBuffer[5];                                         	 	          // Pin for navlight LED/LEDs
+	configInfo.rssiPin                  = msg->messageBuffer[6];                                          	    	          // RSSI input pin
+	configInfo.mainBatteryPin           = msg->messageBuffer[7];          	                             	                  // Main battery input pin
+	configInfo.commBatteryPin           = msg->messageBuffer[8];                                      		          // Comm battery input pin (this board)
+	configInfo.videoBatteryPin          = msg->messageBuffer[9];                                      		          // Video battery input pin
+
+	configInfo.lostMessageThreshold     = 0;			 			                                  // Time in ms without a message before assuming we've lost our signal
+	configInfo.lostMessageThreshold     = msg->messageBuffer[10] << 8;                                                        // Shift 8 to the left for the high byte     
+	configInfo.lostMessageThreshold     = configInfo.lostMessageThreshold | msg->messageBuffer[11];                           // OR with the low byte
+
+	configInfo.heartbeatInterval        = 0;        					                                  // Interval in ms to send our heartbeat
+	configInfo.heartbeatInterval        = msg->messageBuffer[12] << 8;                                                        // Shift 8 to the left for the high byte
+	configInfo.heartbeatInterval        = configInfo.heartbeatInterval | msg->messageBuffer[13];                              // OR with the low byte
+
+	configInfo.pingInterval             = 0;                                                                                  // Interval in ms to send pings
+	configInfo.pingInterval             = msg->messageBuffer[14] << 8;                                                        // Shift 8 to the left for the high byte
+	configInfo.pingInterval             = configInfo.pingInterval | msg->messageBuffer[15];                                   // OR with the low byte
+
+	configInfo.servoCount               = msg->messageBuffer[16];                                                             // # of servos on this board
+	configInfo.buttonCount              = msg->messageBuffer[17];                                                             // # of buttons on this board
+
+	configInfo.ppmPulses 		    = ((configInfo.servoCount * 2) + 2);                                                  // How many pulses are there in the whole PPM
+
+   	configInfo.ppmMinPulse              = 0;                                                                                  // PPM min pulse length in 1/2 usec (default = 2000 = 1ms)
+	configInfo.ppmMinPulse              = msg->messageBuffer[18] << 8;                                                        // Shift 8 to the left for the high byte
+	configInfo.ppmMinPulse              = configInfo.ppmMinPulse | msg->messageBuffer[19];                                    // OR with the low byte
+
+   	configInfo.ppmMaxPulse              = 0;                                                                                  // PPM max pulse length in 1/2 usec (default = 4000 = 2ms)
+	configInfo.ppmMaxPulse              = msg->messageBuffer[20] << 8;                                                        // Shift 8 to the left for the high byte
+	configInfo.ppmMaxPulse              = configInfo.ppmMaxPulse | msg->messageBuffer[21];                                    // OR with the low byte
+
+	configInfo.ppmHighPulse             = 0;                                                                                  // PPM high pulse duration in 1/2 usec (default = 400 = 200usec)
+	configInfo.ppmHighPulse             = msg->messageBuffer[22] << 8;                                                        // Shift 8 to the left for the high byte
+	configInfo.ppmHighPulse             = configInfo.ppmHighPulse | msg->messageBuffer[23];                                   // OR with the low byte
+
+	configInfo.ppmSyncPulse             = 0;                                                                                  // PPM sync pulse duration in 1/2 usec (default = 8000 = 4ms)
+	configInfo.ppmSyncPulse             = msg->messageBuffer[24] << 8;                                                        // Shift 8 to the left for the high byte
+	configInfo.ppmSyncPulse             = configInfo.ppmSyncPulse | msg->messageBuffer[25];                                   // OR with the low byte
+
+	configInfo.statusIntervalSignalLost = 0;                                                                                  // Interval for status to flash when signal is lost
+	configInfo.statusIntervalSignalLost = msg->messageBuffer[26] << 8;                                                        // Shift 8 to the left for the high byte
+	configInfo.statusIntervalSignalLost = configInfo.statusIntervalSignalLost | msg->messageBuffer[27];                       // OR with the low byte
+
+	configInfo.statusIntervalOK         = 0;                                                                                  // Interval for status to flash when everything is OK
+	configInfo.statusIntervalOK         = msg->messageBuffer[28] << 8;                                                        // Shift 8 to the left for the high byte
+	configInfo.statusIntervalOK         = configInfo.statusIntervalOK | msg->messageBuffer[29];                               // OR with the low byte
+
+	configInfo.navlightInterval         = 0;                                                                                  // Interval for navlights to flash
+	configInfo.navlightInterval         = msg->messageBuffer[30] << 8;                                                        // Shift 8 to the left for the high byte
+	configInfo.navlightInterval         = configInfo.navlightInterval | msg->messageBuffer[31];                               // OR with the low byte
+
+	configInfo.buttonPinMap		    = (byte*)calloc(configInfo.buttonCount, sizeof(byte));	               	          // Allocate memory for the button pin map
+
+	byte x;
+
+	for(x = 0 ; x < configInfo.buttonCount ; x++) {
+
+		configInfo.buttonPinMap[x] = msg->messageBuffer[32 + x];
+
+	}
+
+	return true;
+
+}
+
 /* processMessage(message, length) - Do whatever the message tells us to do */
 
 void processMessage(messageState *msg) {
@@ -493,13 +577,30 @@ void processMessage(messageState *msg) {
 	if(msgType == MTYPE_PING) { // We got a ping, send an ack
 
 		sendAck(msg);
-		firstSignalEstablished = true;
 
 	} else if(msgType == MTYPE_PING_REPLY) {  // Handle the message, since it got past checksum it has to be legit
 
-		if(msg->messageBuffer[2] == pingData) { //  See if the payload matches the ping packet we sent out
+		if(msg->messageBuffer[2] == signalInfo.pingData) { //  See if the payload matches the ping packet we sent out
 		
-			handShook = true;
+			signalInfo.handShook = true;
+
+		}
+
+	} else if(msgType == MTYPE_CONFIG) {  // Configuration
+
+		if(readConfig(msg)) {
+
+			if(signalInfo.firstSignalEstablished) {  // We've already been connected and received a config, free up the memory that config took
+
+				// free up memory
+				freeMemory();
+
+			}
+
+			initControlState();                        // Initialise control state
+			initOutputs();                             // Initialise outputs
+			initPPM();                                 // Set default PPM pulses
+			signalInfo.firstSignalEstablished = true; // Got config info, we're set up with the ground station, send our ping out to complete handshake
 
 		}
 
@@ -521,18 +622,18 @@ void processMessage(messageState *msg) {
 
 	} else if(msgType == MTYPE_VAR_SERVOS) {
 
-		byte servoCount = 0;
+		byte numServos = 0;
 		byte servoNum = 0;
 		int servoPos = 0;
 
-		servoCount = msg->messageBuffer[2];
+		numServos = msg->messageBuffer[2];
 
 		#if DEBUG_LEVEL == 10
-		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Updating [%d] servos-", servoCount);
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Updating [%d] servos-", numServos);
 		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);
 		#endif	
 
-		for(x = 0 ; x < servoCount ; x++) {
+		for(x = 0 ; x < numServos ; x++) {
 
 			servoNum = (msg->messageBuffer[(x * 2) + 3] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
 			servoPos = (msg->messageBuffer[(x * 2) + 3] & B00000011) << 8; // Binary: 0000 0011, strip out servo number, shift top 2 bits of servo pos over
@@ -557,7 +658,7 @@ void processMessage(messageState *msg) {
 		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);
 		#endif	
 
-		for(x = 0 ; x < SERVO_COUNT ; x++) {
+		for(x = 0 ; x < configInfo.servoCount ; x++) {
 
 			servoNum = (msg->messageBuffer[(x * 2) + 2] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
 			servoPos = (msg->messageBuffer[(x * 2) + 2] & B00000011) << 8; // Binary: 0000 0011, strip out servo number, shift top 2 bits of servo pos over
@@ -582,7 +683,7 @@ void processMessage(messageState *msg) {
 		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);
 		#endif	
 
-		for(x = 0 ; x < SERVO_COUNT ; x++) {
+		for(x = 0 ; x < configInfo.servoCount ; x++) {
 
 			servoNum = (msg->messageBuffer[(x * 2) + 2] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
 			servoPos = (msg->messageBuffer[(x * 2) + 2] & B00000011) << 8; // Binary: 0000 0011, strip out servo number, shift top 2 bits of servo pos over
@@ -599,10 +700,10 @@ void processMessage(messageState *msg) {
 
 		for(x = 0 ; x < 3 ; x++) {  // This loop handles 4 buttons at once since each uses 2 bits and we read in 1 byte (2 bits * 4 = 8 bits = 1 byte)
 
-			buttons[(x * 4)] = (msg->messageBuffer[x + (2 + (SERVO_COUNT * 2))] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
-			buttons[(x * 4) + 1] = (msg->messageBuffer[x + (2 + (SERVO_COUNT * 2))] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
-			buttons[(x * 4) + 2] = (msg->messageBuffer[x + (2 + (SERVO_COUNT * 2))] & B00001100) >> 2; // Same
-			buttons[(x * 4) + 3] = (msg->messageBuffer[x + (2 + (SERVO_COUNT * 2))] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
+			buttons[(x * 4)] = (msg->messageBuffer[x + (2 + (configInfo.servoCount * 2))] & B11000000) >> 6;     // Bitwise and against our byte to strip away other button values, then bitshift to 0th and 1st positions
+			buttons[(x * 4) + 1] = (msg->messageBuffer[x + (2 + (configInfo.servoCount * 2))] & B00110000) >> 4; // Same, you can see the bitmask shift to the right as we work out way down the byte
+			buttons[(x * 4) + 2] = (msg->messageBuffer[x + (2 + (configInfo.servoCount * 2))] & B00001100) >> 2; // Same
+			buttons[(x * 4) + 3] = (msg->messageBuffer[x + (2 + (configInfo.servoCount * 2))] & B00000011);      // No bitshift here since our bits are already in 0th and 1st pos.
 
 	        }
 
@@ -724,7 +825,7 @@ void sendHeartbeat() {
 	heartbeat[2] = generateChecksum(heartbeat, messageSizes[MTYPE_HEARTBEAT] - 1); // Store our checksum as the last byte
 	
 	Serial.write(heartbeat, messageSizes[MTYPE_HEARTBEAT]);     // Send the sync ACK
-	lastMessageSentTime = millis();
+	signalInfo.lastMessageSentTime = millis();
 	free(heartbeat);
 
 }
@@ -741,13 +842,13 @@ void sendStatus() {
 
 	status = (unsigned char*)calloc(messageSizes[MTYPE_STATUS], sizeof(char));
 
-	rssi = analogRead(RSSI_PIN);
+	rssi = analogRead(configInfo.rssiPin);
 	rssi = map(rssi, 0, 1023, 0, 255);
-	mainVoltage = analogRead(MAIN_BATTERY_PIN);
+	mainVoltage = analogRead(configInfo.mainBatteryPin);
 	mainVoltage = map(mainVoltage, 0, 1023, 0, 255);
-	commVoltage = analogRead(COMM_BATTERY_PIN);
+	commVoltage = analogRead(configInfo.commBatteryPin);
 	commVoltage = map(commVoltage, 0, 1023, 0, 255);
-	videoVoltage = analogRead(VIDEO_BATTERY_PIN);
+	videoVoltage = analogRead(configInfo.videoBatteryPin);
 	videoVoltage = map(videoVoltage, 0, 1023, 0, 255);
 
 	status[0] = MTYPE_BEGIN;
@@ -759,7 +860,7 @@ void sendStatus() {
 	status[6] = generateChecksum(status, messageSizes[MTYPE_STATUS] - 1); // Store our checksum as the last byte
 	
 	Serial.write(status, messageSizes[MTYPE_STATUS]);     // Send the status
-	lastMessageSentTime = millis();
+	signalInfo.lastMessageSentTime = millis();
 	free(status);
 
 }
@@ -769,15 +870,15 @@ void sendStatus() {
 void sendPing() {
 
 	unsigned char ping[4];
-	pingData = random(0, 256);
+	signalInfo.pingData = random(0, 256);
 
 	ping[0] = MTYPE_BEGIN;
 	ping[1] = MTYPE_PING;
-	ping[2] = pingData;
+	ping[2] = signalInfo.pingData;
 	ping[3] = generateChecksum(ping, messageSizes[MTYPE_PING] - 1); // Store our checksum as the last byte
 
 	Serial.write(ping, messageSizes[MTYPE_PING]);     // Send the ping
-	lastMessageSentTime = millis();
+	signalInfo.lastMessageSentTime = millis();
 
 }
 
@@ -798,7 +899,7 @@ void sendAck(messageState *msg) {
 	pingReply[3] = generateChecksum(pingReply, messageSizes[MTYPE_PING_REPLY] - 1); // Store our checksum as the last byte
 
 	Serial.write(pingReply, messageSizes[MTYPE_PING_REPLY]);     // Send the sync ACK
-	lastMessageSentTime = millis();
+	signalInfo.lastMessageSentTime = millis();
 
 }
 
@@ -810,27 +911,30 @@ void updateLights() {
         
 	for(x = 0 ; x < FLASHING_LIGHTS ; x++) {
           
-		if(lights[x].interval > 0) {
-            
+		if(lights[x].pin > 0) {
 
-			unsigned long currentTime = millis(); // get current time
-			if(currentTime - lights[x].lastChanged > lights[x].interval) {
+			if(lights[x].interval > 0) {
+
+				unsigned long currentTime = millis(); // get current time
+				if(currentTime - lights[x].lastChanged > lights[x].interval) {
                 
                 		digitalWrite(lights[x].pin, lights[x].state);
                 		lights[x].state = !lights[x].state;
                 		lights[x].lastChanged = currentTime;
               
-              		}
+       	      			}
 
-		} else if(lights[x].interval == 0) {
+			} else if(lights[x].interval == 0) {
                             
-			digitalWrite(lights[x].pin, HIGH);
+				digitalWrite(lights[x].pin, HIGH);
               
-     		} else {
-            
-			digitalWrite(lights[x].pin, LOW);
-            
-          	}
+	     		} else {	
+	
+				digitalWrite(lights[x].pin, LOW);	
+
+	          	}
+
+		}
           
         }
 	
@@ -841,13 +945,13 @@ void updateLights() {
 void handleSignal() {
 
 	unsigned long currentTime = millis(); // get current time
-	if(handShook) { // Signal is still good last we checked
+	if(signalInfo.handShook) { // Signal is still good last we checked
 
-		if((currentTime - lastMessageTime) > LOST_MSG_THRESHOLD) { // Check if the signal is actually still good
+		if((currentTime - signalInfo.lastMessageTime) > configInfo.lostMessageThreshold) { // Check if the signal is actually still good
      
 			cli(); // Do not allow timer ppm disabling to be interrupted
-			handShook = false;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set handShook = false
-			ppmON = false;                                   // Disable PPM
+			signalInfo.handShook = false;                               // If we haven't received a message in > LOST_MSG_THRESHOLD set handShook = false
+			ppmInfo.ppmON = false;                                   // Disable PPM
 			TIMSK1 = B00000000;                              // Disable interrupt on compare match
 			TCCR1A = B00000000;                              // Disable fast PWM     
 			TCCR1B = B00000000;                              // Disable fast PWM, clock, and prescaler
@@ -867,7 +971,7 @@ void handleSignal() {
 			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---currentTime: %lu lastMessageTime: %lu diff: %lu > %lu-", currentTime, lastMessageTime, (currentTime - lastMessageTime), LOST_MSG_THRESHOLD); // Build debug message
 			writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
 			#endif
-			lights[STATUS_LIGHT].interval = STATUS_INTERVAL_SIGNAL_LOST; // Set status LED interval to signal lost
+			lights[STATUS_LIGHT].interval = configInfo.statusIntervalSignalLost; // Set status LED interval to signal lost
 			#if DEBUG_LEVEL == 3 || DEBUG_LEVEL == 4
 			digitalWrite(DEBUG_PIN1, HIGH);
 			#endif
@@ -875,11 +979,11 @@ void handleSignal() {
 
 		} else { // The signal is good, do we need to send a heartbeat?
 
-			if((currentTime - lastMessageSentTime) > HEARTBEAT_INTERVAL) {
+			if((currentTime - signalInfo.lastMessageSentTime) > configInfo.heartbeatInterval) {
 
-				if(ctrlCounter % 3 == 0) { // Send a status message instead of every 3rd heartbeat
+				if(signalInfo.ctrlCounter % 3 == 0) { // Send a status message instead of every 3rd heartbeat
 	
-					ctrlCounter = 0;
+					signalInfo.ctrlCounter = 0;
 					sendStatus();
 
 				} else {
@@ -888,16 +992,16 @@ void handleSignal() {
 
 				}
 
-				ctrlCounter++;
+				signalInfo.ctrlCounter++;
 
 			}
 
-			if(!ppmON) {  // Restart PPM since it was off
+			if(!ppmInfo.ppmON) {  // Restart PPM since it was off
 
 				cli();  // This shouldn't get interrupted since PPM is off but just to be safe..
 
-				ppmON = true;                           // turn on PPM status flag
-				lights[STATUS_LIGHT].interval = STATUS_INTERVAL_OK; // Set our status LED interval to OK
+				ppmInfo.ppmON = true;                           // turn on PPM status flag
+				lights[STATUS_LIGHT].interval = configInfo.statusIntervalOK; // Set our status LED interval to OK
 
 				#if DEBUG_LEVEL == 1 || DEBUG_LEVEL == 4
 				dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Starting PPM, lostSignal = false-"); // Build debug message
@@ -911,8 +1015,8 @@ void handleSignal() {
 	
 				TCCR1C = B10000000;                     // Force match, should set pin high, WILL NOT generate ISR() call        
 
-				OCR1A = pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
-				currentPulse = 1;                       // Set currentPulse to 1 since there will be no ISR() call to increment it
+				OCR1A = ppmInfo.pulses[0];                      // Set OCR1A to pulse[0], this won't actually matter until we set TCCR1A and TCCR1B at the end to enable fast PWM
+				ppmInfo.currentPulse = 1;              // Set currentPulse to 1 since there will be no ISR() call to increment it
 
 				#ifdef __AVR_ATmega644P__
 				DDRD  |= B00100000;                     // Enable output on OC1A
@@ -931,9 +1035,9 @@ void handleSignal() {
 
 	} else {
 
-		if(firstSignalEstablished) {
+		if(signalInfo.firstSignalEstablished) {
 
-			if((currentTime - lastMessageSentTime) > PING_INTERVAL) { // Signal is bad, send a ping to try restore connection
+			if((currentTime - signalInfo.lastMessageSentTime) > configInfo.pingInterval) { // Signal is bad, send a ping to try restore connection
 
 				sendPing(); 
 
@@ -949,11 +1053,11 @@ void handleSignal() {
 
 void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
 
-	int mappedPulse = map(inValue, inRangeLow, inRangeHigh, PPM_MIN_PULSE, PPM_MAX_PULSE); // Map input value to pulse width
-        if(TCNT1 > PPM_HIGH_PULSE) {  // Avoid PPM inversion by skipping this set, this will cause a max delay of 20ms in a servo position setting
+	int mappedPulse = map(inValue, inRangeLow, inRangeHigh, configInfo.ppmMinPulse, configInfo.ppmMaxPulse); // Map input value to pulse width
+        if(TCNT1 > configInfo.ppmHighPulse) {  // Avoid PPM inversion by skipping this set, this will cause a max delay of 20ms in a servo position setting
   
           cli(); // Disable interrupts while this is being set
-          pulses[(index * 2) + 1] = mappedPulse; // Store new pulse width
+          ppmInfo.pulses[(index * 2) + 1] = mappedPulse; // Store new pulse width
           // DEBUG
           //pulses[(index * 2) + 1] = 2000;
           sei(); // Re-enable interrupts
@@ -971,28 +1075,28 @@ void handleButtonUpdate() {
 
 	if(buttons[4] > 0) { // Handle navlight button
     
-		lights[NAV_LIGHT].interval = NAV_LIGHT_INTERVAL;  // enable navlight if button 5 is on
+		lights[NAV_LIGHT].interval = configInfo.navlightInterval;  // enable navlight if button 5 is on
     
 	} else {
     
 		lights[NAV_LIGHT].interval = -1; // otherwise disable it
     
 	}
-  	for(x = 0 ; x < BUTTON_COUNT ; x++) {
-  	 		  	
+  	for(x = 0 ; x < configInfo.buttonCount ; x++) {
+ 	 		  	
   		if(buttons[x] > 0) {
   		
-  			if(buttonPinMap[x] > 0) {
+  			if(configInfo.buttonPinMap[x] > 0 && configInfo.buttonPinMap[x] < 128) {
   			
-  				digitalWrite(buttonPinMap[x], HIGH);
+  				digitalWrite(configInfo.buttonPinMap[x], HIGH);
   			
   			}
   		
   		} else {
   		
-  			if(buttonPinMap[x] > 0) {
+  			if(configInfo.buttonPinMap[x] > 0 && configInfo.buttonPinMap[x] < 128) {
   			
-  				digitalWrite(buttonPinMap[x], LOW);
+  				digitalWrite(configInfo.buttonPinMap[x], LOW);
   			
   			}
   		
@@ -1000,7 +1104,7 @@ void handleButtonUpdate() {
   	
   	}
 	#if DEBUG_LEVEL == 5
-	for(x = 0 ; x < PPM_PULSES ; x++) {
+	for(x = 0 ; x < configInfo.ppmPulses ; x++) {
 
 		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Pulse[%d]: %d-", x, pulses[x]); // Build debug message
 		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                              // Write debug message
@@ -1015,12 +1119,12 @@ void handleButtonUpdate() {
 void writeXBeeMessage(messageState *msg, unsigned char msgType) {
  
 	msg->messageBuffer[0] = MTYPE_BEGIN;                                                         // Message construction 
-	msg->messageBuffer[1] = msgType;                                                           // Specify the message type
-	msg->messageBuffer[2] = msg->length;                                                       // Message size
+	msg->messageBuffer[1] = msgType;                                                             // Specify the message type
+	msg->messageBuffer[2] = msg->length;                                                         // Message size
 	msg->messageBuffer[msg->length - 1] = generateChecksum(msg->messageBuffer, msg->length - 1); // Fill in our checksum for the whole message
    
 	Serial.write(msg->messageBuffer, msg->length);  // Write out the message
-	lastMessageSentTime = millis();
+	signalInfo.lastMessageSentTime = millis();
      
 }
 
@@ -1065,11 +1169,11 @@ void initTimer() {
 
 ISR(TIMER1_COMPA_vect) {
 
-	OCR1A = pulses[currentPulse];    // Set OCR1A compare register to our next pulse
-	currentPulse++;                  // Increment the pulse counter
-	if(currentPulse >= PPM_PULSES) { // If the pulse counter is too high reset it
+	OCR1A = ppmInfo.pulses[ppmInfo.currentPulse];     // Set OCR1A compare register to our next pulse
+	ppmInfo.currentPulse++;                            // Increment the pulse counter
+	if(ppmInfo.currentPulse >= configInfo.ppmPulses) { // If the pulse counter is too high reset it
     
-		currentPulse = 0;
+		ppmInfo.currentPulse = 0;
     
 	}
  
