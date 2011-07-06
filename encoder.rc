@@ -6,13 +6,13 @@
 [Navlight Pin]
 11
 [RSSI Pin]
-14
+0
 [Main Battery Pin]
-15
+1
 [Comm Battery Pin]
-16
+2
 [Video Battery Pin]
-17
+3
 [Lost Message Threshold]
 1000
 [Heartbeat Interval]

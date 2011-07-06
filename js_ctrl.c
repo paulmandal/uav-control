@@ -196,7 +196,6 @@ typedef struct _signalState {
 
 typedef enum _messageTypes {
 
-	MTYPE_BEGIN = 0,
 	MTYPE_PING, 
 	MTYPE_PING_REPLY, 
 	MTYPE_HEARTBEAT, 
@@ -209,11 +208,12 @@ typedef enum _messageTypes {
 	MTYPE_DEBUG, 
 	MTYPE_RESET, 
 	MTYPE_STATUS, 
-	MTYPE_CONFIG
+	MTYPE_CONFIG,
+	MTYPE_BEGIN
 
 } messageTypes;
 
-int messageSizes[] = {1, 4, 4, 3, 22, 5, 0, 19, 6, 0, 0, 0, 7, 16};
+int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 7, -1, -1};
 
 /* Let's do sum prototypes! */
 
@@ -286,9 +286,6 @@ int main(int argc, char **argv)
 	ppzMsg.readBytes = PPZ_MSG_HEADER_SIZE; // Leave space for the addition of a header to the msg from GCS
 	ppzMsg.length = PPZ_MSG_HEADER_SIZE;
 	
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sStarting js_crl version %d.%d.%d-%s...\n", outputBuffer, VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);  // Print version information
-	strcpy(outputBuffer, printBuffer);
-
 	srand(time(NULL));  // Init random using current time
 	if(readConfig() < 0) { // Read our config into our config vars
 
@@ -1275,6 +1272,7 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 
 					#if DEBUG_LEVEL == 3
 					snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sMSG: %2x ", debugBuffer, testByte);
+					strcpy(debugBuffer, printBuffer);
 					//printf("BYTE[%3d/%3d - HS:%d]: %2x\n", msg->readBytes, msg->length, signalInfo.handShook, testByte); // Print out each received byte	
 					#endif		
 
@@ -1283,7 +1281,7 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 				else {
 
 					snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x\n", debugBuffer, testByte);
-
+					strcpy(debugBuffer, printBuffer);
 				}
 				#endif
 
@@ -1293,6 +1291,7 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 				msg->readBytes++;			       // Increment readBytes
 				#if DEBUG_LEVEL == 3
 				snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, testByte);
+				strcpy(debugBuffer, printBuffer);
 				//printf("BYTE[%3d/%3d - HS:%d]: %2x\n", msg->readBytes, msg->length, signalInfo.handShook, testByte); // Print out each received byte	
 				#endif	
 
@@ -1310,6 +1309,7 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 
 		#if DEBUG_LEVEL == 3
 		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\n", debugBuffer);
+		strcpy(debugBuffer, printBuffer);
 		#endif	
 
 		if(msg->length > 0) { // Message is finished, process it
@@ -1393,15 +1393,15 @@ int getMessageLength(messageState *msg) {
 
 	if(msg->readBytes == 2) { // Do zero-parameter types first, if we can't find one, see if we have enough characters for one of the parametered types
 		
-		int size = messageSizes[msg->messageBuffer[1]];
+		if(msg->messageBuffer[1] < MTYPE_BEGIN) {
 
-		if(size > 0) {
+			int size = messageSizes[msg->messageBuffer[1]];
 
-			return size; // We got the message size
+			return size; // We got the message size or its a parametered type
 
 		} else {
 
-			return -1; // Probably a parametered type
+			return -2; // Invalid type
 
 		}
 
@@ -1465,12 +1465,14 @@ void processMessage(messageState *msg) {
 			signalInfo.handShook = 1;
 			#if DEBUG_LEVEL == 3
 			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGot ping reply w/ valid data!\n", debugBuffer);
+			strcpy(debugBuffer, printBuffer);
 			#endif
 
 		} else {
 
 			#if DEBUG_LEVEL == 3
 			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGot ping reply w/ invalid data!", debugBuffer);
+			strcpy(debugBuffer, printBuffer);
 			#endif
 
 		}
@@ -1488,23 +1490,19 @@ void processMessage(messageState *msg) {
 	
 	} else if(msgType == MTYPE_DEBUG) { // This is a debug message, print it
 	
-		#if DEBUG_LEVEL == 4
-		time_t currentTime = time(NULL);
-		time_t diff = currentTime - startTime;
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sDEBUG MSG from UAV [%lds since last]: ", debugBuffer, diff);
-		startTime = currentTime;
-		#else
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sDEBUG MSG from UAV: ", debugBuffer);
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sDEBUG MSG from UAV: ", outputBuffer);
 		strcpy(outputBuffer, printBuffer);
-		#endif
 
 		for(x = 3 ; x < msg->length - 1 ; x++) {
 		
 		
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%c", debugBuffer, msg->messageBuffer[x]);
+			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%c", outputBuffer, msg->messageBuffer[x]);
+			strcpy(outputBuffer, printBuffer);
 		
 		}
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\n", debugBuffer);
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\n", outputBuffer);
+		strcpy(outputBuffer, printBuffer);
+
 	} else if(msgType == MTYPE_STATUS) {
 
 		// get remote RSSI & battery voltage from the message
@@ -1528,12 +1526,15 @@ void writePortMsg(int outputPort, char *portName, unsigned char *message, int me
 
 		int x;
 		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sWRITING[%02d]: ", debugBuffer, messageSize);
+		strcpy(debugBuffer, printBuffer);
 		for(x = 0 ; x < messageSize ; x++) {
 		
 			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, message[x]);
+			strcpy(debugBuffer, printBuffer);
 	
 		}
-		printf("\n");
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\n", debugBuffer);
+		strcpy(debugBuffer, printBuffer);
 	}
 	#endif
 	msgWrote = write(outputPort, message, messageSize);  // write() and store written byte count in msgWrote
@@ -1554,10 +1555,10 @@ unsigned char generateChecksum(unsigned char *message, int length) {
 	int x;
 
 	#if DEBUG_LEVEL == 21
-	printf("GENCHK[%2d]: ", length);
+	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGENCHK[%2d]: ", debugBuffer, length);
 	for(x = 0 ; x < length ; x++) {
 
-		printf("%2x ", (unsigned int)message[x]); // Print the whole message in hex
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, (unsigned int)message[x]); // Print the whole message in hex
 
 	}
 	printf("CHK: "); // Print the checksum marker
@@ -1570,7 +1571,7 @@ unsigned char generateChecksum(unsigned char *message, int length) {
 	}
 
 	#if DEBUG_LEVEL == 21
-	printf("%2x\n\n", checksum); // Print the checksum
+	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x\n\n", debugBuffer, checksum); // Print the checksum
 	#endif	
 
 	return checksum;
@@ -1585,13 +1586,16 @@ int testChecksum(unsigned char *message, int length) {
 	int x;
 
 	#if DEBUG_LEVEL == 3
-	printf("CHKMSG[%2d]: ", length);
+	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sCHKMSG[%2d]: ", debugBuffer, length);
+	strcpy(debugBuffer, printBuffer);
 	for(x = 0 ; x < length ; x++) {
 
-		printf("%2x ", (unsigned int)message[x]); // Print the whole message in hex
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, (unsigned int)message[x]); // Print the whole message in hex
+		strcpy(debugBuffer, printBuffer);
 
 	}
 	printf("CHK: "); // Print the checksum marker
+	strcpy(debugBuffer, printBuffer);
 	#endif	
 
 	for(x = 0 ; x < length ; x++) {
@@ -1601,10 +1605,12 @@ int testChecksum(unsigned char *message, int length) {
 	}
 
 	#if DEBUG_LEVEL == 3
-	printf("%2x\n\n", checksum); // Print the checksum
+	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x\n\n", debugBuffer, checksum); // Print the checksum
+	strcpy(debugBuffer, printBuffer);
 	#endif	
 
 	if(checksum == 0x00) {
+
 		#if DEBUG_LEVEL == 5
 		printf("++ Good checksum (length: %d): ", length);
 		for(x = 0 ; x < length ; x++) {
@@ -1639,7 +1645,13 @@ int testChecksum(unsigned char *message, int length) {
 
 void handleTimer(int signum) {
 
-	signalInfo.ctrlCounter++;
+	signalInfo.ctrlCounter++; // Increment the counter
+
+	if(signalInfo.ctrlCounter % (configInfo.ppmInterval * 2) == 0) {
+
+		printOutput(); // Print output every other ppmInterval, shouldn't be too fast
+
+	}
 
 	if(signalInfo.handShook) { // We're synced up, send a control update or heartbeat
 
@@ -1657,13 +1669,7 @@ void handleTimer(int signum) {
 			servosChangedCount = -1; // Set servosChangedCount to an impossible value to signal full update
 			signalInfo.ctrlCounter = 0;
 
-		} else if(signalInfo.ctrlCounter % configInfo.ppmInterval == 0) { // Figure out the best kind of update to send
-
-			if(signalInfo.ctrlCounter % (configInfo.ppmInterval * 2) == 0) {
-
-				printOutput(); // Print output every other ppmInterval, shouldn't be too fast
-
-			}
+		} else if(signalInfo.ctrlCounter % configInfo.ppmInterval == 0) { // Figure out the best kind of update to send		
 
 			// Gather counts for each type of control that changed
 
@@ -2157,7 +2163,7 @@ void printOutput() {
 		int x;
 		printf("\033[2J\033[0;0H");
 
-		size = snprintf(buffer, cols, " Joystick -> RC Control v%d.%d.%d-%s ", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);
+		size = snprintf(buffer, cols, " js_crl version %d.%d.%d-%s ", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);
 
 		for(x = 0 ; x < (cols - size) / 2 ; x++) {
 
