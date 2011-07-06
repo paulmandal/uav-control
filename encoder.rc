@@ -25,6 +25,8 @@
 4000
 [PPM High Pulse]
 400
+[PPM Sync Pulse]
+8000
 [Status Interval Signal Lost]
 100
 [Status Interval OK]

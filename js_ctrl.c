@@ -813,6 +813,15 @@ int readConfig() {
 	
 				}
 
+			} else if(strcmp(line, "[PPM Sync Pulse]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.ppmSyncPulse = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
 			} else if(strcmp(line, "[Status Interval Signal Lost]") == 0) {
 
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
