@@ -1,0 +1,40 @@
+[PPM Encoder Config]
+[Debug Pin]
+12
+[Status LED Pin]
+13
+[Navlight Pin]
+11
+[RSSI Pin]
+14
+[Main Battery Pin]
+15
+[Comm Battery Pin]
+16
+[Video Battery Pin]
+17
+[Lost Message Threshold]
+1000
+[Heartbeat Interval]
+500
+[Ping Interval]
+100
+[PPM Min Pulse]
+2000
+[PPM Max Pulse]
+4000
+[PPM High Pulse]
+400
+[Status Interval Signal Lost]
+100
+[Status Interval OK]
+1000
+[Navlight Interval]
+1000
+[Servo Count]
+8
+[Button Count]
+12
+[Button Pin Map]
+2,3,4,5,255,255,255,255,255,255,255,255
+

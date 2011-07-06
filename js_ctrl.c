@@ -79,8 +79,9 @@
 #define SRV_CAM_TILT 6
 #define SRV_LANDING 7
 
-#define CONFIG_FILE "js_ctrl.rc"  // Config file name
-#define CONFIG_FILE_MIN_COUNT 8   // # of variables stored in config file 
+#define CONFIG_FILE           "js_ctrl.rc" // Config file name
+#define ENCODER_CONFIG_FILE   "encoder.rc" // Config file for PPM encoder
+#define CONFIG_FILE_MIN_COUNT            8 // # of variables stored in config file 
 
 #define EFFECTS_COUNT 16
 
@@ -103,16 +104,42 @@ typedef struct _jsState {  // Store the axis and button states
 
 typedef struct _afState { // Store the translated (servo + buttons) states, globally accessible
 
-	unsigned int servos[SERVO_COUNT];
-	unsigned int buttons[BUTTON_COUNT];
+	unsigned int *servos;
+	unsigned int *buttons;
 	int prevThrottle;
-	int servosChanged[SERVO_COUNT];
-	int buttonsChanged[BUTTON_COUNT];
+	int *servosChanged;
+	int *buttonsChanged;
 	int mainBatteryVoltage;
 	int commBatteryVoltage;
 	int videoBatteryVoltage;
 
 } afState;
+
+typedef struct _encoderConfigValues {
+
+	unsigned char debugPin;        // Pin for debug LED
+	unsigned char statusLEDPin;    // Pin for status LED
+	unsigned char navlightPin;     // Pin for navlight LED/LEDs
+	unsigned char rssiPin;         // RSSI input pin
+	unsigned char mainBatteryPin;  // Main battery input pin
+	unsigned char commBatteryPin;  // Comm battery input pin (this board)
+	unsigned char videoBatteryPin; // Video battery input pin
+	int lostMessageThreshold;      // Time in ms without a message before assuming we've lost our signal
+	int heartbeatInterval;         // Interval in ms to send our heartbeat
+	int pingInterval;              // Interval in ms to send pings
+	unsigned char servoCount;      // # of servos on this board
+	unsigned char buttonCount;     // # of buttons on this board
+	int ppmMinPulse;               // PPM min pulse length in 1/2 usec (default = 2000)
+	int ppmMaxPulse;               // PPM max pulse length in 1/2 usec (default = 4000)
+	int ppmHighPulse;              // PPM high pulse duration in 1/2 usec (default = 400)
+	int ppmSyncPulse;              // PPM sync pulse length (bunch of math determines this)
+	int statusIntervalSignalLost;  // Interval for status to flash when signal is lost
+	int statusIntervalOK;          // Interval for status to flash when everything is OK
+	int navlightInterval;          // Interval for navlights to flash
+	unsigned char *buttonPinMap;   // Mapping of buttons to output pins
+
+
+} encoderConfigValues;
 
 typedef struct _configValues {
 
@@ -122,6 +149,7 @@ typedef struct _configValues {
 	int *buttonStateCount;   // Button state counts
 	int jsDiscardUnder;	 // Joystick discard under threshold
 	int ppmInterval;	 // Interval to send commands to XBee
+	int pingInterval;        // Interval to send pings
 	int heartbeatInterval;	 // Heartbeat interval
 	int timeoutThreshold;    // How long without a message before timeout
 	int contextButton;       // Button that affects joystick context
@@ -159,6 +187,7 @@ typedef struct _signalState {
 	int videoRSSI;		   // Video downlink RSSI
 	unsigned char pingData;    // Random character sent along with last ping
 	int ctrlCounter;           // Counter for outbound control messages
+	int sentConfig;		   // Have we sent the config yet?
 	time_t lostSignalTime;     // Time signal was lost
 
 } signalState;
@@ -206,7 +235,7 @@ int getMessageLength(messageState *msg);
 void writePortMsg(int outputPort, char *portName, unsigned char *message, int messageSize);
 unsigned char generateChecksum(unsigned char *message, int length);
 int testChecksum(unsigned char *message, int length);
-void sendCtrlUpdate (int signum);
+void handleTimer(int signum);
 int checkSignal();
 void sendAck(messageState *msg);
 void printState();
@@ -215,16 +244,18 @@ char *fgetsNoNewline(char *s, int n, FILE *stream);
 void printOutput();
 int limitLines(char *buffer, int maxLines);
 void initBuffers();
+void sendConfig();
 
 /* Global state storage variables */
 
 // global variables to store states
 
-afState airframeState;     // Current airframe state
-jsState joystickState;     // Current joystick state
-configValues configInfo;   // Configuration values
-portState ports;	   // Port state holder
-signalState signalInfo;    // Signal info
+afState airframeState;             // Current airframe state
+jsState joystickState;             // Current joystick state
+configValues configInfo;           // Configuration values
+portState ports;	           // Port state holder
+signalState signalInfo;            // Signal info
+encoderConfigValues encoderConfig; // Encoder configuration
 
 char *outputBuffer;
 char *errorBuffer;
@@ -348,6 +379,7 @@ void initGlobals() {
 	signalInfo.localRSSI = 0;
 	signalInfo.remoteRSSI = 0;
 	signalInfo.ctrlCounter = 0;
+	signalInfo.sentConfig = 0;
 	signalInfo.lastMessageTime = time(NULL);
 	signalInfo.lostSignalTime = time(NULL);
 	
@@ -490,7 +522,7 @@ int openJoystick() {
 int readConfig() {
 
 	FILE *fp;
-	int x, buttonCount = 1, readCount = 0, lineBuffer = 1024;
+	int buttonCount = 1, readCount = 0, lineBuffer = 1024;
 	char line[lineBuffer];
 	if ((fp = fopen(CONFIG_FILE, "r")) == NULL) {  // Open the config file read-only
 		
@@ -575,6 +607,15 @@ int readConfig() {
 
 				}
 
+			} else if(strcmp(line, "[Ping Interval]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					configInfo.pingInterval = atoi(line); // Translate ASCII -> double
+					readCount++;
+
+				}
+
 			} else if(strcmp(line, "[Button State Count]") == 0) {
 
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
@@ -630,21 +671,230 @@ int readConfig() {
 
 	fclose(fp);
 
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\nUsing config from %s:\n", outputBuffer, CONFIG_FILE); // Print config values
-	strcpy(outputBuffer, printBuffer);
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s  XBee Port: %s   Joystick Port: %s   Joystick Discard Threshold: %7d\n", outputBuffer, configInfo.xbeePortFile, configInfo.joystickPortFile, configInfo.jsDiscardUnder);
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s  PPM Interval: %7d μs   Heartbeat Interval: %7d ms   Timeout Threshold: %7d ms\n", outputBuffer, configInfo.ppmInterval * 1000, configInfo.heartbeatInterval, configInfo.timeoutThreshold);
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s         Button State Count: \n", outputBuffer);
-	strcpy(outputBuffer, printBuffer);
+	// Reading encoder config file
+
+	if ((fp = fopen(ENCODER_CONFIG_FILE, "r")) == NULL) {  // Open the config file read-only
+		
+		return -1;  // Return -1 if error opening
+
+	} else {
+
+		while (fgetsNoNewline(line, lineBuffer, fp) != NULL) {  // Read the entire file checking it line by line
+
+			if(strcmp(line, "[Debug Pin]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.debugPin = atoi(line); // Translate ASCII -> int
+					readCount++;
 	
-	for(x = 0 ; x < buttonCount ; x++) {
+				}
+
+			} else if(strcmp(line, "[Status LED Pin]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.statusLEDPin = atoi(line); // Translate ASCII -> int
+					readCount++;
 	
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2d-%2d  ", outputBuffer, x + 1, configInfo.buttonStateCount[x]);
-		strcpy(outputBuffer, printBuffer);
+				}
+
+			} else if(strcmp(line, "[Navlight Pin]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.navlightPin = atoi(line); // Translate ASCII -> int
+					readCount++;
 	
+				}
+
+			} else if(strcmp(line, "[RSSI Pin]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.rssiPin = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Main Battery Pin]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.mainBatteryPin = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Comm Battery Pin]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.commBatteryPin = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Video Battery Pin]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.videoBatteryPin = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Lost Message Threshold]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.lostMessageThreshold = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Heartbeat Interval]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.heartbeatInterval = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Ping Interval]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.pingInterval = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[PPM Min Pulse]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.ppmMinPulse = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Servo Count]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.servoCount = atoi(line); // Translate ASCII -> int
+					readCount++;
+
+				}
+
+			} else if(strcmp(line, "[Button Count]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.buttonCount = atoi(line); // Translate ASCII -> int
+					readCount++;
+
+				}
+
+			} else if(strcmp(line, "[PPM Max Pulse]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.ppmMaxPulse = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[PPM High Pulse]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.ppmHighPulse = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Status Interval Signal Lost]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.statusIntervalSignalLost = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Status Interval OK]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.statusIntervalOK = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Navlight Interval]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.navlightInterval = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Button Pin Map]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					int bufferPos, currButton, strPos;
+					char buttonBuffer[4]; // More than 3 digits of a button mapping
+					int lineLength = strlen(line);
+					for(strPos = 0 ; strPos < lineLength ; strPos++) { // Iterate through line[] character by character to get the button count
+
+						if(line[strPos] == ',') { // Each comma separates a button mapping so totalling them should get us our button count
+
+							buttonCount++;
+
+						}
+					}
+
+					encoderConfig.buttonPinMap = calloc(encoderConfig.buttonCount, sizeof(int)); // Allocate memory for our button mapping
+
+					currButton = 0;
+					strPos = 0;
+
+					while(currButton < buttonCount && strPos < lineLength) {  // Keep reading button states while we have lineLength left and buttonCount to meet
+
+						for(bufferPos = 0 ; bufferPos < 4 ; bufferPos++) {
+
+							buttonBuffer[bufferPos] = '\0'; // Null out buttonBuffer
+
+						}
+
+						bufferPos = 0;
+
+						while(line[strPos] != ',' && line[strPos] != '\0' && strPos < lineLength) {
+
+							buttonBuffer[bufferPos] = line[strPos];
+							bufferPos++;
+							strPos++;
+
+						}
+
+						strPos++; // Increment past the last comma
+						encoderConfig.buttonPinMap[currButton] = atoi(buttonBuffer);
+						currButton++;
+
+					}
+	
+				}
+
+			}
+
+		}
+
 	}
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\n\n", outputBuffer);
-	strcpy(outputBuffer, printBuffer);
 
 	if(readCount >= CONFIG_FILE_MIN_COUNT) {
 
@@ -669,7 +919,7 @@ void initTimer() {
 	strcpy(outputBuffer, printBuffer);
 
 	memset(&saCtrl, 0, sizeof (saCtrl));                       // Make signal object
-	saCtrl.sa_handler = &sendCtrlUpdate;                   // Set signal function handler in 'saCtrl'
+	saCtrl.sa_handler = &handleTimer;                   // Set signal function handler in 'saCtrl'
 	sigaction(SIGALRM, &saCtrl, NULL);                     // Set SIGALRM signal handler
 
 	timerCtrl.it_value.tv_sec = 0;
@@ -689,9 +939,13 @@ void initTimer() {
 
 void initAirframe() {
 
+	airframeState.servos = calloc(encoderConfig.servoCount, sizeof(int));
+	airframeState.buttons = calloc(encoderConfig.buttonCount, sizeof(int));
+	airframeState.servosChanged = calloc(encoderConfig.servoCount, sizeof(int));
+	airframeState.buttonsChanged = calloc(encoderConfig.buttonCount, sizeof(int));
 	int i;
 
-	for(i = 0 ; i < SERVO_COUNT ; i++) {
+	for(i = 0 ; i < encoderConfig.servoCount ; i++) {
 
 		airframeState.servos[i] = 511;  // Set all servo pos to 511
 
@@ -1168,11 +1422,11 @@ int getMessageLength(messageState *msg) {
 
 		} else if(msg->messageBuffer[1] == MTYPE_VAR_SERVOS) {
 		
-			int servoCount = (int)msg->messageBuffer[2];
+			int numServos = (int)msg->messageBuffer[2];
 
-			if(servoCount < SERVO_COUNT) {  // If we get close to SERVO_COUNT the sent message would be a ALL_SERVOS or FULL_UPDATE
+			if(numServos < SERVO_COUNT) {  // If we get close to SERVO_COUNT the sent message would be a ALL_SERVOS or FULL_UPDATE
 
-				return 4 + servoCount * 2;  // Convert servo count to # of bytes (2 bytes per servo + begin + type + param + check)
+				return 4 + numServos * 2;  // Convert servo count to # of bytes (2 bytes per servo + begin + type + param + check)
 
 			} else {
 
@@ -1381,13 +1635,15 @@ int testChecksum(unsigned char *message, int length) {
 
 }
 
-/* sendCtrlUpdate() - Send latest control state to XBee port */
+/* handleTimer() - Exec every 1ms, handle anything that needs tight timing */
 
-void sendCtrlUpdate(int signum) {
+void handleTimer(int signum) {
 
 	signalInfo.ctrlCounter++;
 
 	if(signalInfo.handShook) { // We're synced up, send a control update or heartbeat
+
+		if(signalInfo.sentConfig) { // We've sent the config, so send an update or heartbeat	
 
 		// first we figure out what, if anything, changed
 		int servosChangedCount = 0;
@@ -1603,9 +1859,19 @@ void sendCtrlUpdate(int signum) {
 
 		}
 
+		} else { // We haven't send the config, so send it
+
+			if(signalInfo.ctrlCounter % configInfo.pingInterval == 0) { // Send the config sparingly
+
+				sendConfig();
+
+			}
+
+		}
+
 	} else {  // We aren't synced up, send ping request
 
-		if(signalInfo.ctrlCounter % 100 == 0) { // Send these out more sparingly than regular updates
+		if(signalInfo.ctrlCounter % configInfo.pingInterval == 0) { // Send these out more sparingly than regular updates
 
 			unsigned char *pingMsg;
 			pingMsg = calloc(messageSizes[MTYPE_PING], sizeof(char));
@@ -1628,6 +1894,64 @@ void sendCtrlUpdate(int signum) {
 		}
 
 	}
+
+}
+
+/* sendConfig() - Send encoder its configuration */
+
+void sendConfig() {
+
+	unsigned char *configMsg;
+
+	// length: BEGIN + TYPE + LENGTH + 29 + buttonCount + CHECK
+	int msgSize = 33 + encoderConfig.buttonCount; 
+	configMsg = calloc(msgSize, sizeof(char));
+
+	configMsg[0] = MTYPE_BEGIN;
+	configMsg[1] = MTYPE_CONFIG;
+	configMsg[2] = msgSize;
+	configMsg[3] = encoderConfig.debugPin;                         // Store everything
+	configMsg[4] = encoderConfig.statusLEDPin;
+	configMsg[5] = encoderConfig.navlightPin;
+	configMsg[6] = encoderConfig.rssiPin;
+	configMsg[7] = encoderConfig.mainBatteryPin;
+	configMsg[8] = encoderConfig.commBatteryPin;
+	configMsg[9] = encoderConfig.videoBatteryPin;
+	configMsg[10] = encoderConfig.lostMessageThreshold >> 8;       // Shift 8 to the right for high byte
+	configMsg[11] = encoderConfig.lostMessageThreshold & 255;      // Strip off anything above 1111 1111
+	configMsg[12] = encoderConfig.heartbeatInterval >> 8;          // Shift 8 to the right for high byte
+	configMsg[13] = encoderConfig.heartbeatInterval & 255;         // Strip off anything above 1111 1111
+	configMsg[14] = encoderConfig.pingInterval >> 8;               // Shift 8 to the right for high byte
+	configMsg[15] = encoderConfig.pingInterval & 255;              // Strip off anything above 1111 1111
+	configMsg[16] = encoderConfig.servoCount;
+	configMsg[17] = encoderConfig.buttonCount;
+	configMsg[18] = encoderConfig.ppmMinPulse >> 8;                // Shift 8 to the right for high byte
+	configMsg[19] = encoderConfig.ppmMinPulse & 255;               // Strip off anything above 1111 1111
+	configMsg[20] = encoderConfig.ppmMaxPulse >> 8;                // Shift 8 to the right for high byte
+	configMsg[21] = encoderConfig.ppmMaxPulse & 255;               // Strip off anything above 1111 1111
+	configMsg[22] = encoderConfig.ppmHighPulse >> 8;               // Shift 8 to the right for high byte
+	configMsg[23] = encoderConfig.ppmHighPulse & 255;              // Strip off anything above 1111 1111
+	configMsg[24] = encoderConfig.ppmSyncPulse >> 8;               // Shift 8 to the right for high byte
+	configMsg[25] = encoderConfig.ppmSyncPulse & 255;              // Strip off anything above 1111 1111
+	configMsg[26] = encoderConfig.statusIntervalSignalLost >> 8;   // Shift 8 to the right for high byte
+	configMsg[27] = encoderConfig.statusIntervalSignalLost & 255;  // Strip off anything above 1111 1111
+	configMsg[28] = encoderConfig.statusIntervalOK >> 8;           // Shift 8 to the right for high byte
+	configMsg[29] = encoderConfig.statusIntervalOK & 255;          // Strip off anything above 1111 1111
+	configMsg[30] = encoderConfig.navlightInterval >> 8;           // Shift 8 to the right for high byte
+	configMsg[31] = encoderConfig.navlightInterval & 255;          // Strip off anything above 1111 1111
+
+	int x;
+
+	for(x = 0 ; x < encoderConfig.buttonCount ; x++) {
+
+		configMsg[32 + x] = encoderConfig.buttonPinMap[x];
+
+	}
+
+	configMsg[msgSize - 1] = generateChecksum(configMsg, msgSize - 1);
+	writePortMsg(ports.xbeePort, "XBee", configMsg, msgSize); // Write out message to XBee
+	free(configMsg);
+	signalInfo.sentConfig = 1;
 
 }
 

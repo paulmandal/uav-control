@@ -16,3 +16,9 @@
 5
 [Heartbeat Interval]
 500
+[Ping Interval]
+100
+[Servo Count]
+8
+[Button Count]
+12
