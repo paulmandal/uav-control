@@ -37,6 +37,7 @@
                                  // 8 - Report bad checksums
 			         // 9 - Report good and bad checksums
 		           	 // 10 - Processing debug
+				 // 11 - Basic aliveness
 
 #define VERSION_MAJOR          3 // Major version #
 #define VERSION_MINOR          2 // Minor #
@@ -53,7 +54,6 @@
 
 typedef enum _messageTypes {
 
-	MTYPE_BEGIN = 0,
 	MTYPE_PING, 
 	MTYPE_PING_REPLY, 
 	MTYPE_HEARTBEAT, 
@@ -66,7 +66,8 @@ typedef enum _messageTypes {
 	MTYPE_DEBUG, 
 	MTYPE_RESET, 
 	MTYPE_STATUS, 
-	MTYPE_CONFIG
+	MTYPE_CONFIG,
+	MTYPE_BEGIN
 
 } messageTypes;
 
@@ -77,7 +78,7 @@ typedef enum _lightPins {
 
 } lightPins;
 
-byte messageSizes[] = {1, 4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 7, -1};
+int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 7, -1, -1};
 
 /* Various varibles to hold state info */
 
@@ -86,7 +87,7 @@ unsigned int *buttons;      // store button states
 
 ledBlinker lights[FLASHING_LIGHTS];  // blinking lights state
 
-configValues configInfo;   // Configuration
+configValues  configInfo;  // Configuration
 ppmState      ppmInfo;     // PPM state info
 signalState   signalInfo;  // Signal state info
 
@@ -107,6 +108,15 @@ messageState dbgMsg;  // Message struct for outgoing debug messages
 void setup() {
 
 	randomSeed(analogRead(0));          // Seed our random number gen with an unconnected pin's static
+
+	Serial.begin(115200);               // Open XBee/GCS Serial
+	Serial.flush();
+	pinMode(13, OUTPUT);
+	#ifdef __AVR_ATmega644P__
+	Serial1.begin(115200);              // Open PPZ Serial
+	Serial1.flush();
+	#endif
+
 	initSignal();
 	initLights();
 	initMessage(&xbeeMsg);              // Init our XBee message
@@ -116,12 +126,6 @@ void setup() {
 	ppzMsg.length = PPZ_MSG_HEADER_SIZE;    // Leave room for header addition to PPZ message
 	#endif
 	initTimer();                        // Init our timer
-	Serial.begin(115200);               // Open XBee/GCS Serial
-	Serial.flush();
-	#ifdef __AVR_ATmega644P__
-	Serial1.begin(115200);              // Open PPZ Serial
-	Serial1.flush();
-	#endif
   
 	#if DEBUG_LEVEL > 0
 	initMessage(&dbgMsg);      // Init our debug message
@@ -139,8 +143,7 @@ void setup() {
 
 void loop() {
 
-	byte x;
-	// keep track of last time we send a heartbeat
+	int x;
 	updateLights();        // Check if we need to update any lights
 
 	for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) { // checkMessage functions should be run with a much higher frequency than the LED updates or handleSignal()
@@ -191,7 +194,7 @@ void initControlState() {
 	servos = (unsigned int*)calloc(configInfo.servoCount, sizeof(int));
 	buttons = (unsigned int*)calloc(configInfo.buttonCount, sizeof(int));
 
-	byte x;
+	int x;
 
   	// Zero out all buttons and servos
 
@@ -213,7 +216,7 @@ void initControlState() {
 
 void initPPM() {
 
-	byte x;
+	int x;
 	int midPPMPulse = (configInfo.ppmMinPulse + configInfo.ppmMaxPulse) / 2;  
 	ppmInfo.pulses = (int*)calloc(configInfo.ppmPulses, sizeof(int));
 
@@ -241,24 +244,29 @@ void initPPM() {
 
 /* initLights - Set up lights */
 
-void initLights () {
+void initLights() {
 
-	byte x;        
+	int x;        
 
         for(x = 0 ; x < FLASHING_LIGHTS ; x++) {
   
 		lights[x].interval = -1; // Turn light off
 		lights[x].pin = -1;  // Disable light pin
+		lights[x].lastChanged = 0;
+		lights[x].state = false;
 
         }
 
+	lights[STATUS_LIGHT].interval = 3000;
+	lights[STATUS_LIGHT].pin = 13;
+	
 }
 
 /* initOutputs() - Set output pins up */
 
 void initOutputs() {
 
-  	byte x;
+  	int x;
   	
   	for(x = 0 ; x < configInfo.buttonCount ; x++) {
   	
@@ -292,7 +300,7 @@ void initOutputs() {
 
 boolean initMessage(messageState *msg) {
 
-        byte x;
+        int x;
 	msg->readBytes = 0;
 	msg->length = -1; // Init message.length as header length size
 	if((msg->messageBuffer = (unsigned char*)calloc(MSG_BUFFER_SIZE, sizeof(char))) != NULL) {
@@ -316,6 +324,10 @@ boolean checkXBeeMessages(messageState *msg) {
 	if(msg->length == -1) { // Message has < 0 length, check if anything in messageBuffer can fill that in
 
 		msg->length = getMessageLength(msg);
+		#if DEBUG_LEVEL == 1
+		dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---No msg->length yet, getML() returned: %d-", msg->length); // Build debug message
+		writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
+		#endif
 
 	}
 
@@ -329,13 +341,27 @@ boolean checkXBeeMessages(messageState *msg) {
 
 				if(testByte == MTYPE_BEGIN) { // Beginning of a messge
 
+					#if DEBUG_LEVEL == 1
+					dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Got MTYPE_BEGIN-"); // Build debug message
+					writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
+					#endif
 					msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
 					msg->readBytes++;			       // Increment readBytes
 
 				}
+				#if DEBUG_LEVEL == 1
+				else {
+				dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Ignored byte: %2x-", testByte); // Build debug message
+				writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
+				}
+				#endif
 
 			} else {
 
+				#if DEBUG_LEVEL == 1
+				dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Added byte: %2x-", testByte); // Build debug message
+				writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
+				#endif
 				msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
 				msg->readBytes++;			       // Increment readBytes
 
@@ -353,8 +379,16 @@ boolean checkXBeeMessages(messageState *msg) {
 
 		if(msg->length > 0) { // Message is finished, process it
 
+			#if DEBUG_LEVEL == 1
+			dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Msg is complete with %d length-", msg->length); // Build debug message
+			writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
+			#endif
 			if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  
 
+				#if DEBUG_LEVEL == 1
+				dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---Message passed checksum, calling processMessage()-"); // Build debug message
+				writeXBeeMessage(&dbgMsg, MTYPE_DEBUG);                                               // Write debug message
+				#endif
 				processMessage(msg);
 				if(msg->messageBuffer[1] != MTYPE_PING) {
 										
@@ -366,7 +400,7 @@ boolean checkXBeeMessages(messageState *msg) {
 
 		}
 
-		byte x;
+		int x;
 
 		for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
 
@@ -409,7 +443,7 @@ boolean checkPPZMessages(messageState *msg) {
 
 			msg->readBytes = PPZ_MSG_HEADER_SIZE;  // Leave room for header to be added
                         msg->length = PPZ_MSG_HEADER_SIZE;
-			byte x;	
+			int x;	
 
 			// Clear out message so it's ready to be used again	
 			for(x = 0 ; x < MSG_BUFFER_SIZE ; x++) {
@@ -437,15 +471,23 @@ int getMessageLength(messageState *msg) {
 
 	if(msg->readBytes == 2) { // Do zero-parameter types first, if we can't find one, see if we have enough characters for one of the parametered types
 		
-		byte size = messageSizes[msg->messageBuffer[1]];
+		if(msg->messageBuffer[1] < MTYPE_BEGIN) {
 
-		return -1; // Size will be the message size or -1 for parametered types
+			int size = messageSizes[msg->messageBuffer[1]];
+
+			return size; // We got the message size, or it's a parametered type
+
+		} else {
+
+			return -2; // Invalid type
+
+		}
 
 	} else if(msg->readBytes > 2) { // Didn't find any non-parameter message types, let's see if we have a parametered one
 
 		if(msg->messageBuffer[1] == MTYPE_PPZ || msg->messageBuffer[1] == MTYPE_DEBUG) {
 
-			byte msgLength = msg->messageBuffer[2];
+			int msgLength = msg->messageBuffer[2];
 			if(msgLength < MSG_BUFFER_SIZE) {
 	
 				return msgLength;  // PPZ & Debug messages have length as param
@@ -458,7 +500,7 @@ int getMessageLength(messageState *msg) {
 
 		} else if(msg->messageBuffer[1] == MTYPE_VAR_SERVOS) {
 		
-			byte numServos = msg->messageBuffer[2];
+			int numServos = msg->messageBuffer[2];
 
 			if(numServos < configInfo.servoCount) {  // If we get close to configInfo.servoCount the sent message would be a ALL_SERVOS or FULL_UPDATE
 
@@ -471,7 +513,7 @@ int getMessageLength(messageState *msg) {
 
 		} else if(msg->messageBuffer[1] == MTYPE_CONFIG) {
 
-			byte msgLength = msg->messageBuffer[2];
+			int msgLength = msg->messageBuffer[2];
 			if(msgLength < MSG_BUFFER_SIZE) {
 
 				return msgLength; 
@@ -553,9 +595,9 @@ boolean readConfig(messageState *msg) {
 	configInfo.navlightInterval         = msg->messageBuffer[30] << 8;                                                        // Shift 8 to the left for the high byte
 	configInfo.navlightInterval         = configInfo.navlightInterval | msg->messageBuffer[31];                               // OR with the low byte
 
-	configInfo.buttonPinMap		    = (byte*)calloc(configInfo.buttonCount, sizeof(byte));	               	          // Allocate memory for the button pin map
+	configInfo.buttonPinMap		    = (int*)calloc(configInfo.buttonCount, sizeof(int));	               	          // Allocate memory for the button pin map
 
-	byte x;
+	int x;
 
 	for(x = 0 ; x < configInfo.buttonCount ; x++) {
 
@@ -571,7 +613,7 @@ boolean readConfig(messageState *msg) {
 
 void processMessage(messageState *msg) {
 
-        byte x;
+        int x;
 	unsigned char msgType = msg->messageBuffer[1];
 
 	if(msgType == MTYPE_PING) { // We got a ping, send an ack
@@ -606,7 +648,7 @@ void processMessage(messageState *msg) {
 
 	} else if(msgType == MTYPE_SINGLE_SERVO) {
 
-		byte servoNum = 0;
+		int servoNum = 0;
 		int servoPos = 0;
 
 		servoNum = (msg->messageBuffer[2] >> 2) & B00111111; // Binary: 0011 1111, strip out any added 1s
@@ -622,8 +664,8 @@ void processMessage(messageState *msg) {
 
 	} else if(msgType == MTYPE_VAR_SERVOS) {
 
-		byte numServos = 0;
-		byte servoNum = 0;
+		int numServos = 0;
+		int servoNum = 0;
 		int servoPos = 0;
 
 		numServos = msg->messageBuffer[2];
@@ -650,7 +692,7 @@ void processMessage(messageState *msg) {
 
 	} else if(msgType == MTYPE_ALL_SERVOS) {
 
-		byte servoNum = 0;
+		int servoNum = 0;
 		int servoPos = 0;
 
 		#if DEBUG_LEVEL == 10
@@ -675,7 +717,7 @@ void processMessage(messageState *msg) {
 
 	} else if(msgType == MTYPE_FULL_UPDATE) {
 
-		byte servoNum = 0;
+		int servoNum = 0;
 		int servoPos = 0;
 
 		#if DEBUG_LEVEL == 10
@@ -747,7 +789,7 @@ void processMessage(messageState *msg) {
 unsigned char generateChecksum(unsigned char *message, int length) {
 
 	unsigned int checksum = 0x00;
-	byte x;
+	int x;
 
 	for(x = 0 ; x < length ; x++) {
 
@@ -764,7 +806,7 @@ unsigned char generateChecksum(unsigned char *message, int length) {
 int testChecksum(unsigned char *message, int length) {
 
 	unsigned int checksum = 0x00;
-	byte x;
+	int x;
 
 	#if DEBUG_LEVEL == 1
 	dbgMsg.length = snprintf((char *)dbgMsg.messageBuffer, MSG_BUFFER_SIZE, "---CHKMSG:-"); // Build debug message
@@ -907,10 +949,10 @@ void sendAck(messageState *msg) {
 
 void updateLights() {
 
-	byte x;
-        
+	int x;
+
 	for(x = 0 ; x < FLASHING_LIGHTS ; x++) {
-          
+
 		if(lights[x].pin > 0) {
 
 			if(lights[x].interval > 0) {
@@ -918,9 +960,9 @@ void updateLights() {
 				unsigned long currentTime = millis(); // get current time
 				if(currentTime - lights[x].lastChanged > lights[x].interval) {
                 
-                		digitalWrite(lights[x].pin, lights[x].state);
-                		lights[x].state = !lights[x].state;
-                		lights[x].lastChanged = currentTime;
+	                		digitalWrite(lights[x].pin, lights[x].state);
+        	        		lights[x].state = !lights[x].state;
+        	        		lights[x].lastChanged = currentTime;
               
        	      			}
 
@@ -1071,7 +1113,7 @@ void storePulse(byte index, int inValue, int inRangeLow, int inRangeHigh) {
 
 void handleButtonUpdate() {
   
-	byte x;
+	int x;
 
 	if(buttons[4] > 0) { // Handle navlight button
     
@@ -1133,7 +1175,7 @@ void writeXBeeMessage(messageState *msg, unsigned char msgType) {
 #ifdef __AVR_ATmega644P__
 void writePPZMessage(messageState *msg) {
    
-	byte x;
+	int x;
 	
 	msg->messageBuffer[msg->length - 1] = '\0'; // End-of-string for last character replaces checksum
 
