@@ -40,13 +40,15 @@
 				 // 11 - Basic aliveness
 
 #define VERSION_MAJOR          3 // Major version #
-#define VERSION_MINOR          2 // Minor #
-#define VERSION_MOD            1 // Mod #
+#define VERSION_MINOR          3 // Minor #
+#define VERSION_MOD            0 // Mod #
 #define VERSION_TAG        "DBG" // Tag
 
 #define FLASHING_LIGHTS        2 // Number of flashing lights our board has
 
 #define MSG_BUFFER_SIZE      256 // Message buffer size in bytes
+
+#define VOLTAGE_MEASUREMENTS   4 // Voltage measurement count
 
 #define PPZ_MSG_HEADER_SIZE    3 // PPZ msg header size in bytes
 
@@ -78,7 +80,17 @@ typedef enum _lightPins {
 
 } lightPins;
 
-int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 7, -1, -1};
+typedef enum _voltageSamples {
+
+	RSSI = 0,
+	MAIN,
+	COMM,
+	VIDEO
+
+} voltageSamples;
+
+
+int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, -1, -1};
 
 /* Various varibles to hold state info */
 
@@ -87,9 +99,10 @@ unsigned int *buttons;      // store button states
 
 ledBlinker lights[FLASHING_LIGHTS];  // blinking lights state
 
-configValues  configInfo;  // Configuration
-ppmState      ppmInfo;     // PPM state info
-signalState   signalInfo;  // Signal state info
+configValues   configInfo;                        // Configuration
+ppmState       ppmInfo;                           // PPM state info
+signalState    signalInfo;                        // Signal state info
+voltageSampler voltageInfo[VOLTAGE_MEASUREMENTS]; // voltage sample info
 
 messageState xbeeMsg;  // Message struct for messages from XBee line
 #ifdef __AVR_ATmega644P__
@@ -107,7 +120,7 @@ messageState dbgMsg;  // Message struct for outgoing debug messages
 
 void setup() {
 
-	randomSeed(analogRead(0));          // Seed our random number gen with an unconnected pin's static
+	randomSeed(analogRead(7));          // Seed our random number gen with an unconnected pin's static
 
 	Serial.begin(115200);               // Open XBee/GCS Serial
 	Serial.flush();
@@ -182,6 +195,83 @@ void freeMemory() {
 	free(buttons);
 	free(configInfo.buttonPinMap);
 	free(ppmInfo.pulses);
+
+	int x;
+
+	for(x = 0 ; x < VOLTAGE_MEASUREMENTS ; x++) {
+
+		free(voltageInfo[x].sampleData);
+
+	}
+
+}
+
+/* Initialise voltage measurement items */
+
+void initVoltageMeasurement() {
+
+	int x;
+	
+	for(x = 0 ; x < VOLTAGE_MEASUREMENTS ; x++) {
+
+		voltageInfo[x].average = 0;
+		voltageInfo[x].lastSampleTime = 0;
+		voltageInfo[x].currentSample = 0;
+
+	}
+
+	voltageInfo[RSSI].pin = configInfo.rssiPin;
+	voltageInfo[RSSI].sampleData = (int*)calloc(configInfo.voltageSamples, sizeof(int));
+
+	voltageInfo[MAIN].pin = configInfo.mainBatteryPin;
+	voltageInfo[MAIN].sampleData = (int*)calloc(configInfo.voltageSamples, sizeof(int));
+
+	voltageInfo[COMM].pin = configInfo.commBatteryPin;
+	voltageInfo[COMM].sampleData = (int*)calloc(configInfo.voltageSamples, sizeof(int));
+
+	voltageInfo[VIDEO].pin = configInfo.videoBatteryPin;
+	voltageInfo[VIDEO].sampleData = (int*)calloc(configInfo.voltageSamples, sizeof(int));
+
+}
+
+/* getSamples() - Gather RSSI/battery samples and/or compute their average voltages */
+
+void getSamples() {
+
+	int x;
+	unsigned long currentTime = millis();
+
+	for(x = 0 ; x < VOLTAGE_MEASUREMENTS ; x++) {
+
+		if(voltageInfo[x].currentSample > configInfo.voltageSamples) {
+
+			int y;
+			long _average = 0;
+
+			for(y = 0 ; y < configInfo.voltageSamples ; y++) {
+
+				_average = _average + voltageInfo[x].sampleData[y];
+
+
+			}
+
+			_average = _average / configInfo.voltageSamples;
+			voltageInfo[x].average = _average;
+			voltageInfo[x].currentSample = 0;
+
+		} else {
+
+			if(currentTime - voltageInfo[x].lastSampleTime > configInfo.adcSampleRate) {
+
+				voltageInfo[x].sampleData[voltageInfo[x].currentSample] = analogRead(voltageInfo[x].pin);
+				voltageInfo[x].lastSampleTime = currentTime;
+				voltageInfo[x].currentSample++;
+
+			}
+
+		}
+
+	}
 
 }
 
@@ -595,13 +685,19 @@ boolean readConfig(messageState *msg) {
 	configInfo.navlightInterval         = msg->messageBuffer[30] << 8;                                                        // Shift 8 to the left for the high byte
 	configInfo.navlightInterval         = configInfo.navlightInterval | msg->messageBuffer[31];                               // OR with the low byte
 
+	configInfo.voltageSamples	    = msg->messageBuffer[32];
+
+	configInfo.adcSampleRate            = 0;                                                                                  // Interval for navlights to flash
+	configInfo.adcSampleRate            = msg->messageBuffer[33] << 8;                                                        // Shift 8 to the left for the high byte
+	configInfo.adcSampleRate            = configInfo.adcSampleRate | msg->messageBuffer[34];                                  // OR with the low byte
+
 	configInfo.buttonPinMap		    = (int*)calloc(configInfo.buttonCount, sizeof(int));	               	          // Allocate memory for the button pin map
 
 	int x;
 
 	for(x = 0 ; x < configInfo.buttonCount ; x++) {
 
-		configInfo.buttonPinMap[x] = msg->messageBuffer[32 + x];
+		configInfo.buttonPinMap[x] = msg->messageBuffer[35 + x];
 
 	}
 
@@ -639,6 +735,7 @@ void processMessage(messageState *msg) {
 
 			}
 
+			initVoltageMeasurement();		   // Initialise voltage measurerers
 			initControlState();                        // Initialise control state
 			initOutputs();                             // Initialise outputs
 			initPPM();                                 // Set default PPM pulses
@@ -877,29 +974,20 @@ void sendHeartbeat() {
 void sendStatus() {
 
 	unsigned char *status;
-	int mainVoltage = 0;
-	int commVoltage = 0;
-	int videoVoltage = 0;
-	int rssi = 0;
 
 	status = (unsigned char*)calloc(messageSizes[MTYPE_STATUS], sizeof(char));
 
-	rssi = analogRead(configInfo.rssiPin);
-	rssi = map(rssi, 0, 1023, 0, 255);
-	mainVoltage = analogRead(configInfo.mainBatteryPin);
-	mainVoltage = map(mainVoltage, 0, 1023, 0, 255);
-	commVoltage = analogRead(configInfo.commBatteryPin);
-	commVoltage = map(commVoltage, 0, 1023, 0, 255);
-	videoVoltage = analogRead(configInfo.videoBatteryPin);
-	videoVoltage = map(videoVoltage, 0, 1023, 0, 255);
-
 	status[0] = MTYPE_BEGIN;
 	status[1] = MTYPE_STATUS;
-	status[2] = rssi;
-	status[3] = mainVoltage;
-	status[4] = commVoltage;
-	status[5] = videoVoltage;
-	status[6] = generateChecksum(status, messageSizes[MTYPE_STATUS] - 1); // Store our checksum as the last byte
+	status[2] = voltageInfo[RSSI].average >> 8;   // High byte
+	status[3] = voltageInfo[RSSI].average & 255;  // Low byte
+	status[4] = voltageInfo[MAIN].average >> 8;   // High byte
+	status[5] = voltageInfo[MAIN].average & 255;  // Low byte
+	status[6] = voltageInfo[COMM].average >> 8;   // High byte
+	status[7] = voltageInfo[COMM].average & 255;  // Low byte
+	status[8] = voltageInfo[VIDEO].average >> 8;   // High byte
+	status[9] = voltageInfo[VIDEO].average & 255; // Low byte
+	status[10] = generateChecksum(status, messageSizes[MTYPE_STATUS] - 1); // Store our checksum as the last byte
 	
 	Serial.write(status, messageSizes[MTYPE_STATUS]);     // Send the status
 	signalInfo.lastMessageSentTime = millis();
@@ -1019,7 +1107,13 @@ void handleSignal() {
 			#endif
 			sei(); // Re-enable interrupts
 
-		} else { // The signal is good, do we need to send a heartbeat?
+		} else { 
+
+			// Do we need to get samples?
+
+			getSamples();
+
+			// The signal is good, do we need to send a heartbeat?
 
 			if((currentTime - signalInfo.lastMessageSentTime) > configInfo.heartbeatInterval) {
 
