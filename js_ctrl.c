@@ -45,8 +45,8 @@
 			      // Debug level - 7 - Debug servo encoding
 
 #define VERSION_MAJOR 3       // Version information, Major #
-#define VERSION_MINOR 2       // Minor #
-#define VERSION_MOD   1       // Mod #
+#define VERSION_MINOR 3       // Minor #
+#define VERSION_MOD   0       // Mod #
 #define VERSION_TAG   "DBG"   // Tag
 
 #define MAX_CTRL_MSG_SZ         19    // Maximum data size for a control update msg
@@ -84,8 +84,6 @@
 #define CONFIG_FILE_MIN_COUNT            8 // # of variables stored in config file 
 
 #define EFFECTS_COUNT 16
-
-double THROTTLE_SAFETY_DEBUG = 10.0;
 
 /* Structures */
 
@@ -136,6 +134,8 @@ typedef struct _encoderConfigValues {
 	int statusIntervalSignalLost;  // Interval for status to flash when signal is lost
 	int statusIntervalOK;          // Interval for status to flash when everything is OK
 	int navlightInterval;          // Interval for navlights to flash
+	int adcSampleRate;	       // Rate to sample ADC in, ms
+	int voltageSamples;	       // How many voltage samples to average
 	unsigned char *buttonPinMap;   // Mapping of buttons to output pins
 
 
@@ -153,6 +153,7 @@ typedef struct _configValues {
 	int heartbeatInterval;	 // Heartbeat interval
 	int timeoutThreshold;    // How long without a message before timeout
 	int contextButton;       // Button that affects joystick context
+	int throttleSafety;	 // Throttle safety timeout in seconds
 
 } configValues;
 
@@ -213,7 +214,7 @@ typedef enum _messageTypes {
 
 } messageTypes;
 
-int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 7, -1, -1};
+int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, -1, -1};
 
 /* Let's do sum prototypes! */
 
@@ -595,6 +596,15 @@ int readConfig() {
 
 				}
 
+			} else if(strcmp(line, "[Throttle Safety]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					configInfo.throttleSafety = atoi(line); // Translate ASCII -> double
+					readCount++;
+
+				}
+
 			} else if(strcmp(line, "[Heartbeat Interval]") == 0) {
 
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
@@ -773,6 +783,24 @@ int readConfig() {
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
 
 					encoderConfig.ppmMinPulse = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[ADC Sample Rate]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.adcSampleRate = atoi(line); // Translate ASCII -> int
+					readCount++;
+	
+				}
+
+			} else if(strcmp(line, "[Voltage Samples]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					encoderConfig.voltageSamples = atoi(line); // Translate ASCII -> int
 					readCount++;
 	
 				}
@@ -1039,7 +1067,7 @@ void translateJStoAF() {
 
 	time_t currentTime = time(NULL);
 
-	if(difftime(currentTime, startTime) > THROTTLE_SAFETY_DEBUG) {  // Don't allow throttle to change for first 20 seconds after startup - DEBUG may change this?
+	if(difftime(currentTime, startTime) > (double)configInfo.throttleSafety) {  // Don't allow throttle to change for first x seconds
 
 		int currentThrottle = joystickState.axis[THROTTLE] * -1;
 
@@ -1516,10 +1544,14 @@ void processMessage(messageState *msg) {
 
 		// get remote RSSI & battery voltage from the message
 
-		signalInfo.remoteRSSI = msg->messageBuffer[2];
-		airframeState.mainBatteryVoltage = msg->messageBuffer[3];
-		airframeState.commBatteryVoltage = msg->messageBuffer[4];
-		airframeState.videoBatteryVoltage = msg->messageBuffer[5];	
+		signalInfo.remoteRSSI = msg->messageBuffer[2] << 8;
+		signalInfo.remoteRSSI = signalInfo.remoteRSSI | msg->messageBuffer[3];
+		airframeState.mainBatteryVoltage = msg->messageBuffer[4] << 8;
+		airframeState.mainBatteryVoltage = airframeState.mainBatteryVoltage | msg->messageBuffer[5];
+		airframeState.commBatteryVoltage = msg->messageBuffer[6] << 8;
+		airframeState.commBatteryVoltage = airframeState.commBatteryVoltage | msg->messageBuffer[7];
+		airframeState.videoBatteryVoltage = msg->messageBuffer[8] << 8;
+		airframeState.videoBatteryVoltage = airframeState.videoBatteryVoltage | msg->messageBuffer[9];
 
 	}
 
@@ -1919,7 +1951,7 @@ void sendConfig() {
 	unsigned char *configMsg;
 
 	// length: BEGIN + TYPE + LENGTH + 29 + buttonCount + CHECK
-	int msgSize = 33 + encoderConfig.buttonCount; 
+	int msgSize = 36 + encoderConfig.buttonCount; 
 	configMsg = calloc(msgSize, sizeof(char));
 
 	configMsg[0] = MTYPE_BEGIN;
@@ -1954,12 +1986,15 @@ void sendConfig() {
 	configMsg[29] = encoderConfig.statusIntervalOK & 255;          // Strip off anything above 1111 1111
 	configMsg[30] = encoderConfig.navlightInterval >> 8;           // Shift 8 to the right for high byte
 	configMsg[31] = encoderConfig.navlightInterval & 255;          // Strip off anything above 1111 1111
+	configMsg[32] = encoderConfig.voltageSamples & 255;
+	configMsg[33] = encoderConfig.adcSampleRate >> 8;              // Shift 8 to the right for high byte
+	configMsg[34] = encoderConfig.adcSampleRate & 255;             // Strip off anything above 1111 1111
 
 	int x;
 
 	for(x = 0 ; x < encoderConfig.buttonCount ; x++) {
 
-		configMsg[32 + x] = encoderConfig.buttonPinMap[x];
+		configMsg[35 + x] = encoderConfig.buttonPinMap[x];
 
 	}
 
@@ -2003,7 +2038,7 @@ int checkSignal() {
 
 		double signalTimeDiff = difftime(currentTime, signalInfo.lastMessageTime);
 
-		if(signalTimeDiff > configInfo.timeoutThreshold) {  // Looks like we've lost our signal (>1s since last ping ack)
+		if(signalTimeDiff > (double)configInfo.timeoutThreshold) {  // Looks like we've lost our signal (>1s since last ping ack)
 
 			signalInfo.handShook = 0;  // Turn off handshake so we can resync
 			signalInfo.lostSignalTime = time(NULL); // Store time we lost the signal
@@ -2191,9 +2226,9 @@ void printOutput() {
 		printf("\n");
 		double diff = difftime(currentTime, startTime);
 
-		if(diff < THROTTLE_SAFETY_DEBUG) {
+		if(diff < (double)configInfo.throttleSafety) {
 
-			printf("\nThrottle Safety Remaining: %3.0f\n\n\n", THROTTLE_SAFETY_DEBUG - diff);
+			printf("\nThrottle Safety Remaining: %3.0f\n\n\n", (double)configInfo.throttleSafety - diff);
 
 		}
 
