@@ -9,7 +9,7 @@
 [PPM Interval]
 20
 [Timeout Threshold]
-1000
+2
 [Button State Count]
 0,0,0,0,1,1,0,0,0,0,0,0
 [Context Button]
@@ -24,4 +24,6 @@
 12
 [Throttle Safety]
 10
+[Max RSSI Read]
+685
 

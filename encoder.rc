@@ -38,7 +38,7 @@
 [Button Count]
 12
 [Button Pin Map]
-2,3,4,5,255,255,255,255,255,255,255,255
+2,4,10,5,255,255,255,255,255,255,255,255
 [ADC Sample Rate]
 5
 [Voltage Samples]

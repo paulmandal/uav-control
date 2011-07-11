@@ -113,6 +113,13 @@ typedef struct _afState { // Store the translated (servo + buttons) states, glob
 
 } afState;
 
+typedef struct _relayState { // Store the translated (servo + buttons) states, globally accessible
+
+	int commBatteryVoltage;
+	int videoBatteryVoltage;
+
+} relayState;
+
 typedef struct _encoderConfigValues {
 
 	unsigned char debugPin;        // Pin for debug LED
@@ -154,6 +161,7 @@ typedef struct _configValues {
 	int timeoutThreshold;    // How long without a message before timeout
 	int contextButton;       // Button that affects joystick context
 	int throttleSafety;	 // Throttle safety timeout in seconds
+	int maxRSSIread;	 // Maximum RSSI reading
 
 } configValues;
 
@@ -190,6 +198,7 @@ typedef struct _signalState {
 	int ctrlCounter;           // Counter for outbound control messages
 	int sentConfig;		   // Have we sent the config yet?
 	time_t lostSignalTime;     // Time signal was lost
+	int initialConnection;     // Have we connected yet?
 
 } signalState;
 
@@ -209,12 +218,13 @@ typedef enum _messageTypes {
 	MTYPE_DEBUG, 
 	MTYPE_RESET, 
 	MTYPE_STATUS, 
+	MTYPE_GCS_STATUS,
 	MTYPE_CONFIG,
 	MTYPE_BEGIN
 
 } messageTypes;
 
-int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, -1, -1};
+int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, 9, -1, -1};
 
 /* Let's do sum prototypes! */
 
@@ -246,6 +256,8 @@ void printOutput();
 int limitLines(char *buffer, int maxLines);
 void initBuffers();
 void sendConfig();
+void initRelay();
+void rssiBars(int rssi, int max, char *buffer);
 
 /* Global state storage variables */
 
@@ -257,6 +269,7 @@ configValues configInfo;           // Configuration values
 portState ports;	           // Port state holder
 signalState signalInfo;            // Signal info
 encoderConfigValues encoderConfig; // Encoder configuration
+relayState relay;		   // Relay state info
 
 char *outputBuffer;
 char *errorBuffer;
@@ -296,6 +309,7 @@ int main(int argc, char **argv)
 	}
 
 	initAirframe();  // Init airframe state
+	initRelay();     // Init relay state
 
 	if((ports.xbeePort = openPort(configInfo.xbeePortFile, "XBee")) < 0) { // open the XBee port
 		return 1;
@@ -376,8 +390,10 @@ void initGlobals() {
 	signalInfo.handShook = 0;
 	signalInfo.localRSSI = 0;
 	signalInfo.remoteRSSI = 0;
+	signalInfo.videoRSSI = 0;
 	signalInfo.ctrlCounter = 0;
 	signalInfo.sentConfig = 0;
+	signalInfo.initialConnection = 0;
 	signalInfo.lastMessageTime = time(NULL);
 	signalInfo.lostSignalTime = time(NULL);
 	
@@ -619,6 +635,15 @@ int readConfig() {
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
 
 					configInfo.pingInterval = atoi(line); // Translate ASCII -> double
+					readCount++;
+
+				}
+
+			} else if(strcmp(line, "[Max RSSI Read]") == 0) {
+
+				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
+
+					configInfo.maxRSSIread = atoi(line); // Translate ASCII -> double
 					readCount++;
 
 				}
@@ -966,6 +991,15 @@ void initTimer() {
 
 	setitimer(ITIMER_REAL, &timerCtrl, NULL);               // Start the timer
 
+
+}
+
+/* initAirframe() - Initalise relay state */
+
+void initRelay() {
+
+	relay.commBatteryVoltage = 0;
+	relay.videoBatteryVoltage = 0;
 
 }
 
@@ -1354,9 +1388,9 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 			if(testChecksum(msg->messageBuffer, msg->length)) { // Checksum passed, process message..  
 
 				processMessage(msg);
-				if(msg->messageBuffer[1] != MTYPE_PING) {
+				if(msg->messageBuffer[1] != MTYPE_PING && msg->messageBuffer[1] != MTYPE_GCS_STATUS ) {
 										
-					signalInfo.lastMessageTime = time(NULL); // Set last message time, except for from a ping
+					signalInfo.lastMessageTime = time(NULL); // Set last message time, except for from a ping or GCS status update
 
 				}
 
@@ -1500,6 +1534,7 @@ void processMessage(messageState *msg) {
 		if(msg->messageBuffer[2] == signalInfo.pingData) { //  See if the payload matches the ping packet we sent out
 		
 			signalInfo.handShook = 1;
+			signalInfo.initialConnection = 1;
 			#if DEBUG_LEVEL == 3
 			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGot ping reply w/ valid data!\n", debugBuffer);
 			strcpy(debugBuffer, printBuffer);
@@ -1543,7 +1578,8 @@ void processMessage(messageState *msg) {
 	} else if(msgType == MTYPE_STATUS) {
 
 		// get remote RSSI & battery voltage from the message
-
+		//snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGot UAV status msg..", debugBuffer);
+		//strcpy(debugBuffer, printBuffer);
 		signalInfo.remoteRSSI = msg->messageBuffer[2] << 8;
 		signalInfo.remoteRSSI = signalInfo.remoteRSSI | msg->messageBuffer[3];
 		airframeState.mainBatteryVoltage = msg->messageBuffer[4] << 8;
@@ -1552,6 +1588,18 @@ void processMessage(messageState *msg) {
 		airframeState.commBatteryVoltage = airframeState.commBatteryVoltage | msg->messageBuffer[7];
 		airframeState.videoBatteryVoltage = msg->messageBuffer[8] << 8;
 		airframeState.videoBatteryVoltage = airframeState.videoBatteryVoltage | msg->messageBuffer[9];
+
+	} else if(msgType == MTYPE_GCS_STATUS) {
+
+		// get remote RSSI & battery voltage from the message
+		//snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGot GCS status msg..", debugBuffer);
+		//strcpy(debugBuffer, printBuffer);
+		signalInfo.localRSSI = msg->messageBuffer[2] << 8;
+		signalInfo.localRSSI = signalInfo.localRSSI | msg->messageBuffer[3];
+		relay.commBatteryVoltage = msg->messageBuffer[4] << 8;
+		relay.commBatteryVoltage = relay.commBatteryVoltage | msg->messageBuffer[5];
+		relay.videoBatteryVoltage = msg->messageBuffer[6] << 8;
+		relay.videoBatteryVoltage = relay.videoBatteryVoltage | msg->messageBuffer[7];
 
 	}
 
@@ -1653,28 +1701,32 @@ int testChecksum(unsigned char *message, int length) {
 	if(checksum == 0x00) {
 
 		#if DEBUG_LEVEL == 5
-		printf("++ Good checksum (length: %d): ", length);
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s++ Good checksum (length: %d): ", debugBuffer, length);
+		strcpy(debugBuffer, printBuffer);
 		for(x = 0 ; x < length ; x++) {
 				
-			printf("%2x ", (unsigned int)message[x]); // Print the whole message in hex			
+			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, (unsigned int)message[x]); // Print the whole message in hex			
+			strcpy(debugBuffer, printBuffer);
 		
 		}
-		printf("CHK: "); // Print the checksum marker
-		printf("%2x\n", checksum); // Print the checksum
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sCHK: %2x\n", debugBuffer, checksum); // Print the checksum
+		strcpy(debugBuffer, printBuffer);
 		#endif	
 		return 1;  // Checksum passed!
 
 	} else {
 
 		#if DEBUG_LEVEL == 5
-		printf("-- Bad checksum (length: %d): ", length);
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s-- Bad checksum (length: %d): ", debugBuffer, length);
+		strcpy(debugBuffer, printBuffer);
 		for(x = 0 ; x < length ; x++) {
 				
-			printf("%2x ", (unsigned int)message[x]); // Print the whole message in hex			
+			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, (unsigned int)message[x]); // Print the whole message in hex			
+			strcpy(debugBuffer, printBuffer);
 		
 		}
-		printf("CHK: "); // Print the checksum marker
-		printf("%2x\n", checksum); // Print the checksum
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sCHK: %2x\n", debugBuffer, checksum); // Print the checksum
+		strcpy(debugBuffer, printBuffer);
 		#endif	
 		return 0;
 
@@ -2052,36 +2104,40 @@ int checkSignal() {
 		
 	} else {
 
-		double signalTimeDiff = difftime(currentTime, signalInfo.lostSignalTime);
-		double rumbleTimeDiff = difftime(currentTime, joystickState.lastRumbleTime);
-		
-		if(signalTimeDiff > 0.0 && rumbleTimeDiff > 0.5 && joystickState.rumbleLevel < (EFFECTS_COUNT - 1)) {  // Small rumble
-	
-			joystickState.lastRumbleTime = currentTime;
-			
-			play.type = EV_FF;
-			play.code = joystickState.effects[joystickState.rumbleLevel].id;
-			play.value = 1;
-			if (write(joystickState.event, (const void*) &play, sizeof(play)) == -1) {
-				perror("Play effect");
-				exit(1);
-			}
-			joystickState.rumbleLevel++;
-			return 0;
-	
-		} else if(signalTimeDiff > 0.0 && rumbleTimeDiff > 0.5 && joystickState.rumbleLevel == (EFFECTS_COUNT - 1)) {
-	
-			joystickState.lastRumbleTime = currentTime;	
-			play.type = EV_FF;
-			play.code = joystickState.effects[joystickState.rumbleLevel].id;
-			play.value = 1;
+		if(signalInfo.initialConnection) {
 
-			if (write(joystickState.event, (const void*) &play, sizeof(play)) == -1) {
-				perror("Play effect");
-				exit(1);
-			}		
-			return 0;
+			double signalTimeDiff = difftime(currentTime, signalInfo.lostSignalTime);
+			double rumbleTimeDiff = difftime(currentTime, joystickState.lastRumbleTime);
 		
+			if(signalTimeDiff > 0.0 && rumbleTimeDiff > 0.5 && joystickState.rumbleLevel < (EFFECTS_COUNT - 1)) {  // Small rumble
+	
+				joystickState.lastRumbleTime = currentTime;
+			
+				play.type = EV_FF;
+				play.code = joystickState.effects[joystickState.rumbleLevel].id;
+				play.value = 1;
+				if (write(joystickState.event, (const void*) &play, sizeof(play)) == -1) {
+					perror("Play effect");
+					exit(1);
+				}
+				joystickState.rumbleLevel++;
+				return 0;
+	
+			} else if(signalTimeDiff > 0.0 && rumbleTimeDiff > 0.5 && joystickState.rumbleLevel == (EFFECTS_COUNT - 1)) {
+	
+				joystickState.lastRumbleTime = currentTime;	
+				play.type = EV_FF;
+				play.code = joystickState.effects[joystickState.rumbleLevel].id;
+				play.value = 1;
+
+				if (write(joystickState.event, (const void*) &play, sizeof(play)) == -1) {
+					perror("Play effect");
+					exit(1);
+				}		
+				return 0;
+		
+			}
+
 		}
 	
 	}
@@ -2095,6 +2151,15 @@ int checkSignal() {
 int map(int value, int inRangeLow, int inRangeHigh, int outRangeLow, int outRangeHigh)
 {
 	return outRangeLow + (value-inRangeLow)*(outRangeHigh-outRangeLow)/(inRangeHigh-inRangeLow);
+}
+
+/* fmap() - Map a number in inRangeLow->inRangeHigh range into outRangeLow->outRangeHigh.. again! */
+
+float fmap(float value, float inRangeLow, float inRangeHigh, float outRangeLow, float outRangeHigh)
+{
+
+	float result = outRangeLow + (value-inRangeLow)*(outRangeHigh-outRangeLow)/(inRangeHigh-inRangeLow);
+	return result;
 }
 
 /* fgetsNoNewline() - Wrapper for fgets() that returns a string without the newline */
@@ -2195,9 +2260,9 @@ void printOutput() {
 	int cols = w.ws_col;
 	buffer = calloc(cols, sizeof(char));
 
-	int outputAlloc = 20;
+	int outputAlloc = 10;
 	int debugAlloc = 5;
-	int errorAlloc = 5;
+	int errorAlloc = 2;
 	int size;
 
 		int outputLines = limitLines(outputBuffer, outputAlloc);
@@ -2269,7 +2334,47 @@ void printOutput() {
 		}
 		printf("\n");		
 
-		printf("RSSI: %3d   Main Battery: %3d  Comm Battery: %3d  Video Battery: %3d\n", signalInfo.remoteRSSI, airframeState.mainBatteryVoltage, airframeState.commBatteryVoltage, airframeState.videoBatteryVoltage);
+		// quick & dirty for now	 DEBUG
+
+		float gcsCommBattery = fmap((float)relay.commBatteryVoltage, 0.0, 1023.0, 0.0, 4.2 * 2.0); // 2S battery
+		float uavCommBattery = fmap((float)airframeState.commBatteryVoltage, 0.0, 1023.0, 0.0, 4.2 * 2.0);
+		float uavVideoBattery = fmap((float)airframeState.videoBatteryVoltage, 0.0, 1023.0, 0.0, 4.2 * 3.0); // 3S battery
+		float gcsVideoBattery = fmap((float)relay.videoBatteryVoltage, 0.0, 1023.0, 0.0, 4.2 * 3.0);
+		float uavMainBattery = fmap((float)airframeState.mainBatteryVoltage, 0.0, 1023.0, 0.0, 4.2 * 3.0);
+
+		if(gcsCommBattery < 3.7 * 2.0) { gcsCommBattery = 3.7 * 2.0; }
+		if(uavCommBattery < 3.7 * 2.0) { uavCommBattery = 3.7 * 2.0; }
+		if(uavVideoBattery < 3.7 * 3.0) { uavVideoBattery = 3.7 * 3.0; }
+		if(gcsVideoBattery < 3.7 * 3.0) { gcsVideoBattery = 3.7 * 3.0; }
+		if(uavMainBattery < 3.7 * 3.0) { uavMainBattery = 3.7 * 3.0; }
+
+		float gcsCommPercent = fmap(gcsCommBattery, 3.7 * 2.0, 4.2 * 2.0, 0.0, 100.0);
+		float uavCommPercent = fmap(uavCommBattery, 3.7 * 2.0, 4.2 * 2.0, 0.0, 100.0);
+		float uavVideoPercent = fmap(uavVideoBattery, 3.7 * 3.0, 4.2 * 3.0, 0.0, 100.0);
+		float gcsVideoPercent = fmap(gcsVideoBattery, 3.7 * 3.0, 4.2 * 3.0, 0.0, 100.0);
+		float uavMainPercent = fmap(uavMainBattery, 3.7 * 3.0, 4.2 * 3.0, 0.0, 100.0);
+
+		char *localBars = calloc(5, sizeof(char));
+		char *remoteBars = calloc(5, sizeof(char));
+		char *videoBars = calloc(5, sizeof(char));
+
+		rssiBars(signalInfo.localRSSI, configInfo.maxRSSIread, localBars);
+		rssiBars(signalInfo.remoteRSSI, configInfo.maxRSSIread, remoteBars);
+		rssiBars(signalInfo.videoRSSI, configInfo.maxRSSIread, videoBars);				
+
+		printf("GCS RSSI:         %4d [%s]                    videoRx RSSI:  %4d [%s]\n", signalInfo.localRSSI, localBars, signalInfo.videoRSSI, videoBars);
+		printf("GCS Comm Battery: %4d (%5.3f%% - %5.2fV)  Video Battery:  %4d (%5.3f%% - %5.2fV)\n", relay.commBatteryVoltage, gcsCommPercent, 
+									gcsCommBattery, relay.videoBatteryVoltage, gcsVideoPercent, gcsVideoBattery);
+
+		printf("\nUAV RSSI:         %4d [%s]\n", signalInfo.remoteRSSI, remoteBars);
+
+		printf("UAV Main Battery: %4d (%5.3f%% - %5.2fV)   Comm Battery:  %4d (%5.3f%% - %5.2fV)  Video Battery: %4d (%5.3f%% - %5.2fV)\n", airframeState.mainBatteryVoltage, 
+									uavMainPercent, uavMainBattery, airframeState.commBatteryVoltage, uavCommPercent, uavCommBattery, 
+									airframeState.videoBatteryVoltage, uavVideoPercent, uavVideoBattery);
+
+		free(localBars);
+		free(remoteBars);
+		free(videoBars);
 
 		size = snprintf(buffer, cols, " Output ");
 
@@ -2354,5 +2459,41 @@ void printOutput() {
 		fflush(stdout);
 
 	free(buffer);
+
+}
+
+void rssiBars(int rssi, int max, char *buffer) {
+
+	int step = max / 6;
+
+	if(rssi < step) {
+
+		strcpy(buffer, "     ");
+
+	} else if(rssi < step * 2) {
+
+		strcpy(buffer, "#    ");
+
+	} else if(rssi < step * 3) {
+
+		strcpy(buffer, "##   ");
+
+	} else if(rssi < step * 4) {
+
+		strcpy(buffer, "###  ");
+
+	} else if(rssi < step * 5) {
+
+		strcpy(buffer, "#### ");
+
+	} else if(rssi > (step * 5) - 1) {
+
+		strcpy(buffer, "#####");
+
+	} else {
+
+		strcpy(buffer, " wat ");
+
+	}
 
 }
