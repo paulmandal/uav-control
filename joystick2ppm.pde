@@ -22,7 +22,7 @@
 
 /* Including things */
 
-#include "WProgram.h" 
+#include "WProgram.h"
 #include "joystickRC_structs.h"
 
 /* This is the defining moment of the file */
@@ -68,6 +68,7 @@ typedef enum _messageTypes {
 	MTYPE_DEBUG, 
 	MTYPE_RESET, 
 	MTYPE_STATUS, 
+	MTYPE_GCS_STATUS,
 	MTYPE_CONFIG,
 	MTYPE_BEGIN
 
@@ -90,7 +91,7 @@ typedef enum _voltageSamples {
 } voltageSamples;
 
 
-int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, -1, -1};
+int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, 9, -1, -1};
 
 /* Various varibles to hold state info */
 
