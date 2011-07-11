@@ -1,9 +1,9 @@
-#define SERVO_COUNT 8
+#define SERVO_COUNT 11
 #define SIGNAL_PIN 13
 #define THROTTLE_SERVO 1
 
 int servoValues[SERVO_COUNT];
-int servoPins[SERVO_COUNT] = {2, 3, 4, 5, 6, 7, 9};
+int servoPins[SERVO_COUNT] = {2, 3, 5, 6, 7, 9, 10, 11, 12, 18, 19};
 int currentPulse;
 int currentPulseOut;
 
