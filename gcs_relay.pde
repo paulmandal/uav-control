@@ -1,11 +1,9 @@
 #define MSG_BUFFER_SIZE     256 // Message buffer size in bytes
 
-#define VOLTAGE_MEASUREMENTS   4 // Voltage measurement count
-
 #define PPZ_MSG_HEADER_SIZE    3 // PPZ msg header size in bytes
-#define VOLTAGE_SAMPLES 50 
-#define ADC_SAMPLE_RATE 5
-#define VOLTAGE_MEASUREMENTS   3 // Voltage measurement count
+#define VOLTAGE_SAMPLES 5 
+#define ADC_SAMPLE_RATE 500
+#define VOLTAGE_MEASUREMENTS   2 // Voltage measurement count
 
 #define FLASHING_LIGHTS 1
 
@@ -31,14 +29,14 @@ typedef enum _messageTypes {
 	MTYPE_STATUS, 
 	MTYPE_GCS_STATUS,
 	MTYPE_CONFIG,
+	MTYPE_REQ_CFG,
 	MTYPE_BEGIN
 
 } messageTypes;
 
 typedef enum _voltageSamples {
 
-	RSSI = 0,
-	COMM,
+	COMM = 0,
 	VIDEO
 
 } voltageSamples;
@@ -53,7 +51,7 @@ ledBlinker lights[FLASHING_LIGHTS];  // blinking lights state
 
 voltageSampler voltageInfo[VOLTAGE_MEASUREMENTS]; // voltage sample info
 
-int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, 9, -1, -1};
+int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, 9, -1, 4, -1};
 
 boolean pulse = false;
 boolean output = false;
@@ -61,6 +59,7 @@ unsigned long lastStatusSent = 0;
 
 messageState gcsMsg;
 messageState uavMsg;
+rssiState rssiInfo;
 
 void setup() {
   
@@ -71,11 +70,12 @@ void setup() {
 
 	initMessage(&gcsMsg);
 	initMessage(&uavMsg);
-	initMessage(&dbgMsg);
 	initVoltageMeasurement();
 
+	initRSSI();
 	initLights();
 	initOutputs();
+	initRSSITimer();
 
 }
 
@@ -100,6 +100,29 @@ void loop() {
   
 }
 
+/* Initialise RSSI struct */
+
+void initRSSI() {
+
+	rssiInfo.rssiCount = 0;
+	rssiInfo._totalHigh = 0;
+	rssiInfo.totalHigh = 0;
+	rssiInfo.pin = 9;
+
+}
+
+/* Initialise timer */
+
+void initRSSITimer() {
+
+	TCCR2A = B00000000; // Normal mode
+	TIMSK2 = B00000010;
+	OCR2A = 40;
+	TCNT2 = 0;
+	TCCR2B = B00000010; // 8 prescaler, starts timer
+	
+}
+
 /* Initialise voltage measurement items */
 
 void initVoltageMeasurement() {
@@ -114,18 +137,15 @@ void initVoltageMeasurement() {
 
 	}
 
-	voltageInfo[RSSI].pin = RSSI;
-	voltageInfo[RSSI].sampleData = (int*)calloc(VOLTAGE_SAMPLES, sizeof(int));
-
-	voltageInfo[COMM].pin = COMM;
+	voltageInfo[COMM].pin = COMM + 1;
 	voltageInfo[COMM].sampleData = (int*)calloc(VOLTAGE_SAMPLES, sizeof(int));
 
-	voltageInfo[VIDEO].pin = VIDEO;
+	voltageInfo[VIDEO].pin = VIDEO + 1; // dirty, change after new board design
 	voltageInfo[VIDEO].sampleData = (int*)calloc(VOLTAGE_SAMPLES, sizeof(int));
 
 }
 
-/* getSamples() - Gather RSSI/battery samples and/or compute their average voltages */
+/* getSamples() - Gather battery samples and/or compute their average voltages */
 
 void getSamples() {
 
@@ -477,10 +497,10 @@ void sendStatus() {
 
 	status[0] = MTYPE_BEGIN;
 	status[1] = MTYPE_GCS_STATUS;
-	status[2] = timeHigh >> 8;//voltageInfo[RSSI].average >> 8;   // High byte
-	status[3] = timeHigh & 255;//voltageInfo[RSSI].average & 255;  // Low byte
-	status[4] = timeLow >> 8;//voltageInfo[COMM].average >> 8;   // High byte
-	status[5] = timeLow & 255;// voltageInfo[COMM].average & 255;  // Low byte
+	status[2] = rssiInfo.totalHigh >> 8;   // High byte
+	status[3] = rssiInfo.totalHigh & 255;  // Low byte
+	status[4] = voltageInfo[COMM].average >> 8;   // High byte
+	status[5] = voltageInfo[COMM].average & 255;  // Low byte
 	status[6] = voltageInfo[VIDEO].average >> 8;   // High byte
 	status[7] = voltageInfo[VIDEO].average & 255; // Low byte
 	status[8] = generateChecksum(status, messageSizes[MTYPE_GCS_STATUS] - 1); // Store our checksum as the last byte
@@ -506,4 +526,27 @@ unsigned char generateChecksum(unsigned char *message, int length) {
 
 	return checksum;
 
+}
+
+ISR(TIMER2_COMPA_vect) {
+
+	if(digitalRead(rssiInfo.pin)) {
+
+		rssiInfo._totalHigh++;
+
+	}
+
+	if(rssiInfo.rssiCount == 24000) {
+
+		rssiInfo.totalHigh = rssiInfo._totalHigh / 10;
+		rssiInfo.rssiCount = 0;
+		rssiInfo._totalHigh = 0;
+
+	}
+
+	TCNT2 = 0;
+	OCR2A = 40;
+
+	rssiInfo.rssiCount++;	
+	
 }

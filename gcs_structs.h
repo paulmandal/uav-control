@@ -26,3 +26,12 @@ struct voltageSampler {
 	int *sampleData;
 
 };
+
+struct rssiState {
+
+	int rssiCount;
+	int _totalHigh;
+	int totalHigh;
+	int pin;
+
+};
