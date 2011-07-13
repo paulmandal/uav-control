@@ -161,7 +161,6 @@ typedef struct _configValues {
 	int timeoutThreshold;    // How long without a message before timeout
 	int contextButton;       // Button that affects joystick context
 	int throttleSafety;	 // Throttle safety timeout in seconds
-	int maxRSSIread;	 // Maximum RSSI reading
 
 } configValues;
 
@@ -194,6 +193,11 @@ typedef struct _signalState {
 	int localRSSI;		   // Local RSSI
 	int remoteRSSI;		   // Remote RSSI
 	int videoRSSI;		   // Video downlink RSSI
+	int localdBm;		   // Local XBee RSSI in dBm
+	int remotedBm;		   // UAV XBee RSSI in dBm
+	int videodBm;		   // Video downlink RSSI in dBm
+	int maxdBm;
+	int mindBm;
 	unsigned char pingData;    // Random character sent along with last ping
 	int ctrlCounter;           // Counter for outbound control messages
 	int sentConfig;		   // Have we sent the config yet?
@@ -220,11 +224,12 @@ typedef enum _messageTypes {
 	MTYPE_STATUS, 
 	MTYPE_GCS_STATUS,
 	MTYPE_CONFIG,
+	MTYPE_REQ_CFG,
 	MTYPE_BEGIN
 
 } messageTypes;
 
-int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, 9, -1, -1};
+int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, 9, -1, 4, -1};
 
 /* Let's do sum prototypes! */
 
@@ -257,7 +262,7 @@ int limitLines(char *buffer, int maxLines);
 void initBuffers();
 void sendConfig();
 void initRelay();
-void rssiBars(int rssi, int max, char *buffer);
+void rssiBars(int rssi, char *buffer);
 
 /* Global state storage variables */
 
@@ -336,13 +341,8 @@ int main(int argc, char **argv)
 
 		if(!signalInfo.handShook) {
 
-			#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
 			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sHandshaking..", outputBuffer);
 			strcpy(outputBuffer, printBuffer);
-			#endif
-			#if DEBUG_LEVEL == 1	
-			printf("\n");
-			#endif
 			while(!signalInfo.handShook) {  // Handshaking loop
 
 				checkXBeeMessages(ports.xbeePort, &xbeeMsg); // Check for pending msg bytes
@@ -350,11 +350,6 @@ int main(int argc, char **argv)
 				checkSignal(); // call checkSignal() to allow rumble
 
 			}
-
-			#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sgot ACK, handshake complete!\n\n", outputBuffer);
-			strcpy(outputBuffer, printBuffer);
-			#endif
 	
 		}
 		
@@ -396,6 +391,9 @@ void initGlobals() {
 	signalInfo.initialConnection = 0;
 	signalInfo.lastMessageTime = time(NULL);
 	signalInfo.lostSignalTime = time(NULL);
+
+	signalInfo.maxdBm = -1000;
+	signalInfo.mindBm = 0;
 	
 }
 
@@ -635,15 +633,6 @@ int readConfig() {
 				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
 
 					configInfo.pingInterval = atoi(line); // Translate ASCII -> double
-					readCount++;
-
-				}
-
-			} else if(strcmp(line, "[Max RSSI Read]") == 0) {
-
-				if(fgetsNoNewline(line, lineBuffer, fp) != NULL) {
-
-					configInfo.maxRSSIread = atoi(line); // Translate ASCII -> double
 					readCount++;
 
 				}
@@ -1527,6 +1516,9 @@ void processMessage(messageState *msg) {
 
 	if(msgType == MTYPE_PING) { // We got a ping, send an ack
 
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s..connection complete!\n", outputBuffer);
+		strcpy(outputBuffer, printBuffer);
+
 		sendAck(msg);		
 
 	} else if(msgType == MTYPE_PING_REPLY) {  // Handle the message, since it got past checksum it has to be legit
@@ -1535,17 +1527,11 @@ void processMessage(messageState *msg) {
 		
 			signalInfo.handShook = 1;
 			signalInfo.initialConnection = 1;
-			#if DEBUG_LEVEL == 3
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGot ping reply w/ valid data!\n", debugBuffer);
-			strcpy(debugBuffer, printBuffer);
-			#endif
 
 		} else {
 
-			#if DEBUG_LEVEL == 3
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGot ping reply w/ invalid data!", debugBuffer);
+			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s.Got ping reply w/ invalid data..", debugBuffer);
 			strcpy(debugBuffer, printBuffer);
-			#endif
 
 		}
 
@@ -1575,6 +1561,10 @@ void processMessage(messageState *msg) {
 		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\n", outputBuffer);
 		strcpy(outputBuffer, printBuffer);
 
+	} else if(msgType == MTYPE_REQ_CFG) {
+
+		sendConfig();
+
 	} else if(msgType == MTYPE_STATUS) {
 
 		// get remote RSSI & battery voltage from the message
@@ -1588,6 +1578,10 @@ void processMessage(messageState *msg) {
 		airframeState.commBatteryVoltage = airframeState.commBatteryVoltage | msg->messageBuffer[7];
 		airframeState.videoBatteryVoltage = msg->messageBuffer[8] << 8;
 		airframeState.videoBatteryVoltage = airframeState.videoBatteryVoltage | msg->messageBuffer[9];
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sUAV RSSI %4d MBATT %4d CBATT %4d VBATT %4d\n", debugBuffer, signalInfo.remoteRSSI, airframeState.mainBatteryVoltage, airframeState.commBatteryVoltage, airframeState.videoBatteryVoltage);
+		strcpy(debugBuffer, printBuffer);
+
+		signalInfo.remotedBm = ((signalInfo.remoteRSSI + 5928) / 41) - 256;
 
 	} else if(msgType == MTYPE_GCS_STATUS) {
 
@@ -1600,6 +1594,12 @@ void processMessage(messageState *msg) {
 		relay.commBatteryVoltage = relay.commBatteryVoltage | msg->messageBuffer[5];
 		relay.videoBatteryVoltage = msg->messageBuffer[6] << 8;
 		relay.videoBatteryVoltage = relay.videoBatteryVoltage | msg->messageBuffer[7];
+		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGCS RSSI %4d CBATT %4d VBATT %4d\n", debugBuffer, signalInfo.localRSSI, relay.commBatteryVoltage, relay.videoBatteryVoltage);
+		strcpy(debugBuffer, printBuffer);
+
+		signalInfo.localdBm = ((signalInfo.localRSSI + 5928) / 41) - 256;
+		if(signalInfo.localdBm > signalInfo.maxdBm) { signalInfo.maxdBm = signalInfo.localdBm; }
+		if(signalInfo.localdBm < signalInfo.mindBm) { signalInfo.mindBm = signalInfo.localdBm; }	
 
 	}
 
@@ -1958,14 +1958,6 @@ void handleTimer(int signum) {
 
 		}
 
-		} else { // We haven't send the config, so send it
-
-			if(signalInfo.ctrlCounter % configInfo.pingInterval == 0) { // Send the config sparingly
-
-				sendConfig();
-
-			}
-
 		}
 
 	} else {  // We aren't synced up, send ping request
@@ -1982,11 +1974,6 @@ void handleTimer(int signum) {
 			pingMsg[2] = signalInfo.pingData;
 			pingMsg[3] = generateChecksum(pingMsg, messageSizes[MTYPE_PING] - 1); // Store our checksum as the last byte
 	
-			#if DEBUG_LEVEL == 0
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s.", outputBuffer);
-			strcpy(outputBuffer, printBuffer);
-			#endif
-			fflush(stdout);
 			writePortMsg(ports.xbeePort, "XBee", pingMsg, messageSizes[MTYPE_PING]);  // Write the handshake to the XBee port
 			free(pingMsg);
 
@@ -2054,6 +2041,8 @@ void sendConfig() {
 	writePortMsg(ports.xbeePort, "XBee", configMsg, msgSize); // Write out message to XBee
 	free(configMsg);
 	signalInfo.sentConfig = 1;
+	signalInfo.maxdBm = -1000;
+	signalInfo.mindBm = 0;
 
 }
 
@@ -2069,6 +2058,7 @@ void sendAck(messageState *msg) {
 	pingReply[3] = generateChecksum(pingReply, messageSizes[MTYPE_PING_REPLY] - 1); // Store our checksum as the last byte
 
 	writePortMsg(ports.xbeePort, "XBee", pingReply, messageSizes[MTYPE_PING_REPLY]);  // Write the handshake to the XBee port
+	signalInfo.sentConfig = 1;  // Since we never get a ping before sending config, this is an already configured and running UAV we've connected to
 
 }
 
@@ -2236,6 +2226,17 @@ int limitLines(char *buffer, int maxLines) {
 		x++;
 
 	}
+
+	/*length = strlen(buffer);
+
+	if(buffer[length - 1] != '\n') { 
+
+		char _buffer[DISPLAY_BUFFER_SZ];
+		snprintf(_buffer, DISPLAY_BUFFER_SZ, "%s\n", buffer);
+		strcpy(buffer, _buffer);
+
+	}*/
+
 	
 	if(removed) {
 
@@ -2358,19 +2359,21 @@ void printOutput() {
 		char *remoteBars = calloc(5, sizeof(char));
 		char *videoBars = calloc(5, sizeof(char));
 
-		rssiBars(signalInfo.localRSSI, configInfo.maxRSSIread, localBars);
-		rssiBars(signalInfo.remoteRSSI, configInfo.maxRSSIread, remoteBars);
-		rssiBars(signalInfo.videoRSSI, configInfo.maxRSSIread, videoBars);				
+		rssiBars(signalInfo.localdBm, localBars);
+		rssiBars(signalInfo.remotedBm, remoteBars);
+		rssiBars(signalInfo.videodBm, videoBars);				
 
-		printf("GCS RSSI:         %4d [%s]                    videoRx RSSI:  %4d [%s]\n", signalInfo.localRSSI, localBars, signalInfo.videoRSSI, videoBars);
+		printf("GCS RSSI:         %4d dBm [%s]                    videoRx RSSI:  %4d dBm [%s]\n", signalInfo.localdBm, localBars, signalInfo.videoRSSI, videoBars);
 		printf("GCS Comm Battery: %4d (%5.3f%% - %5.2fV)  Video Battery:  %4d (%5.3f%% - %5.2fV)\n", relay.commBatteryVoltage, gcsCommPercent, 
 									gcsCommBattery, relay.videoBatteryVoltage, gcsVideoPercent, gcsVideoBattery);
 
-		printf("\nUAV RSSI:         %4d [%s]\n", signalInfo.remoteRSSI, remoteBars);
+		printf("\nUAV RSSI:         %4d dBm [%s]\n", signalInfo.remotedBm, remoteBars);
 
 		printf("UAV Main Battery: %4d (%5.3f%% - %5.2fV)   Comm Battery:  %4d (%5.3f%% - %5.2fV)  Video Battery: %4d (%5.3f%% - %5.2fV)\n", airframeState.mainBatteryVoltage, 
 									uavMainPercent, uavMainBattery, airframeState.commBatteryVoltage, uavCommPercent, uavCommBattery, 
 									airframeState.videoBatteryVoltage, uavVideoPercent, uavVideoBattery);
+
+		printf("Max: %4d Min: %4d\n", signalInfo.maxdBm, signalInfo.mindBm);
 
 		free(localBars);
 		free(remoteBars);
@@ -2462,31 +2465,29 @@ void printOutput() {
 
 }
 
-void rssiBars(int rssi, int max, char *buffer) {
+void rssiBars(int rssi, char *buffer) {
 
-	int step = max / 6;
-
-	if(rssi < step) {
+	if(rssi <= -100) {
 
 		strcpy(buffer, "     ");
 
-	} else if(rssi < step * 2) {
+	} else if(rssi < -100) {
 
 		strcpy(buffer, "#    ");
 
-	} else if(rssi < step * 3) {
+	} else if(rssi < -94) {
 
 		strcpy(buffer, "##   ");
 
-	} else if(rssi < step * 4) {
+	} else if(rssi < -88) {
 
 		strcpy(buffer, "###  ");
 
-	} else if(rssi < step * 5) {
+	} else if(rssi < -82) {
 
 		strcpy(buffer, "#### ");
 
-	} else if(rssi > (step * 5) - 1) {
+	} else if(rssi < -53) {
 
 		strcpy(buffer, "#####");
 

@@ -1,12 +1,12 @@
 [PPM Encoder Config]
 [Debug Pin]
-12
+10
 [Status LED Pin]
 13
 [Navlight Pin]
 11
 [RSSI Pin]
-0
+12
 [Main Battery Pin]
 1
 [Comm Battery Pin]
@@ -40,7 +40,7 @@
 [Button Pin Map]
 2,4,10,5,255,255,255,255,255,255,255,255
 [ADC Sample Rate]
-5
+1000
 [Voltage Samples]
-50
+2
 
