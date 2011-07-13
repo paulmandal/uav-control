@@ -109,18 +109,7 @@ ISR(TIMER1_CAPT_vect) {
 	long _ICR1 = ICR1;
 
 	if(pulse) {
-
-		pulseBeginTime = _ICR1;
-		if(currentPulse == SERVO_COUNT) {
-
-			currentPulse = 0;
-
-		}
-
-		TCCR1B = B10000010; // Clock prescaler / 8, rising edge on ICP1 = interrupt
-
-	} else {
-
+		
 		long timeDiff;
 		if(_ICR1 > pulseBeginTime) {
 
@@ -154,17 +143,29 @@ ISR(TIMER1_CAPT_vect) {
 		}
 
 		TCCR1B = B11000010; // Clock prescaler / 8, falling edge on ICP1 = interrupt
+		pulse = false;
+
+	} else {
+
+		pulseBeginTime = _ICR1;
+		if(currentPulse == SERVO_COUNT) {
+
+			currentPulse = 0;
+
+		}
+
+		TCCR1B = B10000010; // Clock prescaler / 8, rising edge on ICP1 = interrupt
+		pulse = true;
 
 	}
 
-	pulse = !pulse;
 	lightCounter++;
 
 }
 
 ISR(TIMER1_COMPA_vect) {
 
-	if(servoPulse) { // We've hit OCR2A in servoPulse mode (8 usec interval, TOP = turn off pulse)
+	if(servoPulse) { // We've hit OCR1A in servoPulse mode (1/2 usec interval, TOP = turn off pulse)
 
 		digitalWrite(servoPins[currentPulseOut], LOW); // Turn off previous servo pin
 		currentPulseOut++;
