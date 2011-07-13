@@ -27,6 +27,15 @@ struct voltageSampler {
 
 };
 
+struct rssiState {
+
+	int rssiCount;
+	int _totalHigh;
+	int totalHigh;
+	int pin;
+
+};
+
 struct configValues {
 
 	int debugPin;                 // Pin for debug LED
@@ -58,7 +67,8 @@ struct configValues {
 struct signalState {
 
 	boolean	handShook;
-	boolean firstSignalEstablished;
+	boolean gotPing;
+	boolean gotConfig;
 	unsigned char pingData;
 	unsigned long lastMessageTime; // Time of last legit message, -100 initially so the PPM won't turn on until we get a real message
 	unsigned long lastMessageSentTime;

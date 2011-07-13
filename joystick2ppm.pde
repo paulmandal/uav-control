@@ -48,7 +48,7 @@
 
 #define MSG_BUFFER_SIZE      256 // Message buffer size in bytes
 
-#define VOLTAGE_MEASUREMENTS   4 // Voltage measurement count
+#define VOLTAGE_MEASUREMENTS   3 // Voltage measurement count
 
 #define PPZ_MSG_HEADER_SIZE    3 // PPZ msg header size in bytes
 
@@ -70,6 +70,7 @@ typedef enum _messageTypes {
 	MTYPE_STATUS, 
 	MTYPE_GCS_STATUS,
 	MTYPE_CONFIG,
+	MTYPE_REQ_CFG,
 	MTYPE_BEGIN
 
 } messageTypes;
@@ -83,15 +84,14 @@ typedef enum _lightPins {
 
 typedef enum _voltageSamples {
 
-	RSSI = 0,
-	MAIN,
+	MAIN = 0,
 	COMM,
 	VIDEO
 
 } voltageSamples;
 
 
-int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, 9, -1, -1};
+int messageSizes[] = {4, 4, 3, 22, 5, -1, 19, 6, -1, -1, -1, 11, 9, -1, 4, -1};
 
 /* Various varibles to hold state info */
 
@@ -104,6 +104,7 @@ configValues   configInfo;                        // Configuration
 ppmState       ppmInfo;                           // PPM state info
 signalState    signalInfo;                        // Signal state info
 voltageSampler voltageInfo[VOLTAGE_MEASUREMENTS]; // voltage sample info
+rssiState      rssiInfo;			  // RSSI state
 
 messageState xbeeMsg;  // Message struct for messages from XBee line
 #ifdef __AVR_ATmega644P__
@@ -180,7 +181,8 @@ void loop() {
 void initSignal() {
 
 	signalInfo.handShook = false;
-	signalInfo.firstSignalEstablished = false;
+	signalInfo.gotPing = false;
+	signalInfo.gotConfig = false;
 	signalInfo.pingData = 0;
 	signalInfo.lastMessageTime = -1000UL; // Time of last legit message, -100 initially so the PPM won't turn on until we get a real message
 	signalInfo.lastMessageSentTime = 0UL;
@@ -207,6 +209,29 @@ void freeMemory() {
 
 }
 
+/* Initialise RSSI struct */
+
+void initRSSI() {
+
+	rssiInfo.rssiCount = 0;
+	rssiInfo._totalHigh = 0;
+	rssiInfo.totalHigh = 0;
+	rssiInfo.pin = configInfo.rssiPin;
+
+}
+
+/* Initialise timer */
+
+void initRSSITimer() {
+
+	TCCR2A = B00000000; // Normal mode
+	TIMSK2 = B00000010;
+	OCR2A = 40;
+	TCNT2 = 0;
+	TCCR2B = B00000010; // 8 prescaler, starts timer
+	
+}
+
 /* Initialise voltage measurement items */
 
 void initVoltageMeasurement() {
@@ -220,9 +245,6 @@ void initVoltageMeasurement() {
 		voltageInfo[x].currentSample = 0;
 
 	}
-
-	voltageInfo[RSSI].pin = configInfo.rssiPin;
-	voltageInfo[RSSI].sampleData = (int*)calloc(configInfo.voltageSamples, sizeof(int));
 
 	voltageInfo[MAIN].pin = configInfo.mainBatteryPin;
 	voltageInfo[MAIN].sampleData = (int*)calloc(configInfo.voltageSamples, sizeof(int));
@@ -317,6 +339,8 @@ void initPPM() {
 		ppmInfo.pulses[(x * 2) + 1] = midPPMPulse;       // Set all PPM pulses to halfpulse
     
 	}
+
+	ppmInfo.pulses[3] = configInfo.ppmMinPulse; // Throttle zeroed out
 
 	ppmInfo.pulses[configInfo.ppmPulses - 1] = configInfo.ppmSyncPulse; // Sync pulse is before 0 length pulse
 
@@ -716,6 +740,7 @@ void processMessage(messageState *msg) {
 	if(msgType == MTYPE_PING) { // We got a ping, send an ack
 
 		sendAck(msg);
+		signalInfo.gotPing = true; // Got ping
 
 	} else if(msgType == MTYPE_PING_REPLY) {  // Handle the message, since it got past checksum it has to be legit
 
@@ -729,7 +754,7 @@ void processMessage(messageState *msg) {
 
 		if(readConfig(msg)) {
 
-			if(signalInfo.firstSignalEstablished) {  // We've already been connected and received a config, free up the memory that config took
+			if(signalInfo.gotPing) {  // We've already been connected and received a config, free up the memory that config took
 
 				// free up memory
 				freeMemory();
@@ -740,7 +765,9 @@ void processMessage(messageState *msg) {
 			initControlState();                        // Initialise control state
 			initOutputs();                             // Initialise outputs
 			initPPM();                                 // Set default PPM pulses
-			signalInfo.firstSignalEstablished = true; // Got config info, we're set up with the ground station, send our ping out to complete handshake
+			initRSSI();
+			initRSSITimer();
+			signalInfo.gotConfig = true;		   // Got config info, we're set up with the ground station, send our ping out to complete handshake
 
 		}
 
@@ -980,8 +1007,8 @@ void sendStatus() {
 
 	status[0] = MTYPE_BEGIN;
 	status[1] = MTYPE_STATUS;
-	status[2] = voltageInfo[RSSI].average >> 8;   // High byte
-	status[3] = voltageInfo[RSSI].average & 255;  // Low byte
+	status[2] = rssiInfo.totalHigh >> 8;   // High byte
+	status[3] = rssiInfo.totalHigh & 255;  // Low byte
 	status[4] = voltageInfo[MAIN].average >> 8;   // High byte
 	status[5] = voltageInfo[MAIN].average & 255;  // Low byte
 	status[6] = voltageInfo[COMM].average >> 8;   // High byte
@@ -993,6 +1020,22 @@ void sendStatus() {
 	Serial.write(status, messageSizes[MTYPE_STATUS]);     // Send the status
 	signalInfo.lastMessageSentTime = millis();
 	free(status);
+
+}
+
+/* requestConfig() - Send config request! */
+
+void requestConfig() {
+
+	unsigned char cfgreq[4];
+	
+	cfgreq[0] = MTYPE_BEGIN;
+	cfgreq[1] = MTYPE_REQ_CFG;
+	cfgreq[2] = random(0, 256);
+	cfgreq[3] = generateChecksum(cfgreq, messageSizes[MTYPE_REQ_CFG] - 1); // Store our checksum as the last byte
+
+	Serial.write(cfgreq, messageSizes[MTYPE_REQ_CFG]);     // Send the request
+	signalInfo.lastMessageSentTime = millis();
 
 }
 
@@ -1172,14 +1215,26 @@ void handleSignal() {
 
 	} else {
 
-		if(signalInfo.firstSignalEstablished) {
+		if(signalInfo.gotPing) {
 
-			if((currentTime - signalInfo.lastMessageSentTime) > configInfo.pingInterval) { // Signal is bad, send a ping to try restore connection
+			if(signalInfo.gotConfig) {
+		
+				if((currentTime - signalInfo.lastMessageSentTime) > configInfo.pingInterval) { // Signal is bad, send a ping to try restore connection
 
-				sendPing(); 
+					sendPing(); 
 
+				}
+
+			} else {	
+
+				if((currentTime - signalInfo.lastMessageSentTime) > 100) { // Signal is bad, send a ping to try restore connection
+		
+					requestConfig(); 
+
+				}
+		
 			}
-	
+
 		}
     
 	}
@@ -1314,4 +1369,28 @@ ISR(TIMER1_COMPA_vect) {
     
 	}
  
+}
+
+
+ISR(TIMER2_COMPA_vect) {
+
+	if(digitalRead(rssiInfo.pin)) {
+
+		rssiInfo._totalHigh++;
+
+	}
+
+	if(rssiInfo.rssiCount == 24000) {
+
+		rssiInfo.totalHigh = rssiInfo._totalHigh / 10;
+		rssiInfo.rssiCount = 0;
+		rssiInfo._totalHigh = 0;
+
+	}
+
+	TCNT2 = 0;
+	OCR2A = 40;
+
+	rssiInfo.rssiCount++;	
+	
 }
