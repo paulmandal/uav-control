@@ -25,6 +25,7 @@
 #include <termios.h>
 #include <time.h>
 #include <math.h>
+#include <ncurses.h>  // Let's use some f-cking curses!
 
 #include <linux/input.h>
 #include <linux/joystick.h>
@@ -206,6 +207,18 @@ typedef struct _signalState {
 
 } signalState;
 
+typedef struct _ncWindows {
+
+	WINDOW *mainWindow;
+	WINDOW *outputWindow;
+	WINDOW *debugWindow;
+	WINDOW *errorWindow;
+	WINDOW *border1;
+	WINDOW *border2;
+	WINDOW *border3;
+
+} ncWindows;
+
 /* Numbers */
 
 typedef enum _messageTypes {
@@ -258,11 +271,11 @@ void printState();
 int map(int value, int inRangeLow, int inRangeHigh, int outRangeLow, int outRangeHigh);
 char *fgetsNoNewline(char *s, int n, FILE *stream);
 void printOutput();
-int limitLines(char *buffer, int maxLines);
-void initBuffers();
 void sendConfig();
 void initRelay();
 void rssiBars(int rssi, char *buffer);
+void initNC();
+void clearNC();
 
 /* Global state storage variables */
 
@@ -275,11 +288,7 @@ portState ports;	           // Port state holder
 signalState signalInfo;            // Signal info
 encoderConfigValues encoderConfig; // Encoder configuration
 relayState relay;		   // Relay state info
-
-char *outputBuffer;
-char *errorBuffer;
-char *debugBuffer;
-char *printBuffer;
+ncWindows display;	           // ncurses windows
 
 #if DEBUG_LEVEL > 0
 int debugCommandsPerAck = 0;
@@ -292,6 +301,8 @@ time_t startTime;
 int main(int argc, char **argv)
 {
 
+	initNC();
+
 	startTime = time(NULL);
 	messageState xbeeMsg;	   // messageState for incoming XBee message
 	messageState ppzMsg;	   // messageState for incoming PPZ message
@@ -300,7 +311,6 @@ int main(int argc, char **argv)
 
 	initMessage(&xbeeMsg);
 	initMessage(&ppzMsg);
-	initBuffers();
 	
 	ppzMsg.readBytes = PPZ_MSG_HEADER_SIZE; // Leave space for the addition of a header to the msg from GCS
 	ppzMsg.length = PPZ_MSG_HEADER_SIZE;
@@ -309,6 +319,7 @@ int main(int argc, char **argv)
 	if(readConfig() < 0) { // Read our config into our config vars
 
 		perror("Error reading config"); // Error reading config file
+		clearNC();
 		return 1;
 
 	}
@@ -317,32 +328,33 @@ int main(int argc, char **argv)
 	initRelay();     // Init relay state
 
 	if((ports.xbeePort = openPort(configInfo.xbeePortFile, "XBee")) < 0) { // open the XBee port
+		clearNC();
 		return 1;
 	}
 
 	if(openPty(&ports.ppzPty, "PPZ") < 0) { // open the PPZ pty
-
+		clearNC();
 		return 1;	
 		
 	} 
 	
 	if(openJoystick() < 0) { // open the Joystick
+		clearNC();
 		return 1;
 	}
 
 	initRumble();   // Set up rumble effects
 	initTimer(); 	// Set up timers
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\nPPZ pty file is: %s\n\n", outputBuffer, ports.ppzPty.slaveDevice);
-	strcpy(outputBuffer, printBuffer);
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sReady to read JS & relay for PPZ...\n\n", outputBuffer);
-	strcpy(outputBuffer, printBuffer);
+	wprintw(display.outputWindow, "\nPPZ pty file is: %s", ports.ppzPty.slaveDevice);
+	wprintw(display.outputWindow, "Ready to read JS & relay for PPZ...\n\n");
+	wrefresh(display.outputWindow);
 
 	while(1) {
 
 		if(!signalInfo.handShook) {
 
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sHandshaking..", outputBuffer);
-			strcpy(outputBuffer, printBuffer);
+			wprintw(display.outputWindow, "Handshaking..");
+			wrefresh(display.outputWindow);
 			while(!signalInfo.handShook) {  // Handshaking loop
 
 				checkXBeeMessages(ports.xbeePort, &xbeeMsg); // Check for pending msg bytes
@@ -372,11 +384,100 @@ int main(int argc, char **argv)
 
 	free(xbeeMsg.messageBuffer); // Meh
 	free(ppzMsg.messageBuffer); // Not that this matters..
+	clearNC();
 	return 0;
 
 }
 
 /* Function definitions */
+
+/* initNC() - Initialise ncurses */
+
+void initNC() {
+
+	int rows, cols, x;
+
+	display.mainWindow = initscr();
+	cbreak();
+	noecho();
+
+	getmaxyx(display.mainWindow, rows, cols);
+
+	int headerRows = 14;
+	int outputRows = rows - 40;
+	int debugRows = 5;
+	int errorRows = 4;
+
+	display.border1      = subwin(display.mainWindow,          1, cols, headerRows, 0);
+	display.outputWindow = subwin(display.mainWindow, outputRows, cols, headerRows + 1, 0);
+	display.border2      = subwin(display.mainWindow,          1, cols, headerRows + outputRows + 1, 0);
+	display.debugWindow  = subwin(display.mainWindow,  debugRows, cols, headerRows + outputRows + 2, 0);
+	display.border3      = subwin(display.mainWindow,          1, cols, headerRows + outputRows + debugRows + 2, 0);
+	display.errorWindow  = subwin(display.mainWindow,  errorRows, cols, headerRows + outputRows + debugRows + 3, 0);
+
+	idlok(display.outputWindow, TRUE);
+	scrollok(display.outputWindow, TRUE);
+	idlok(display.debugWindow, TRUE);
+	scrollok(display.debugWindow, TRUE);
+	idlok(display.errorWindow, TRUE);
+	scrollok(display.errorWindow, TRUE);
+
+	for(x = 0 ; x < (cols / 2) - 4; x++) {
+
+		wprintw(display.border1, "-");
+
+	}
+
+	wprintw(display.border1, " Output ", rows);
+
+	for(x = 0 ; x < (cols / 2) - 4; x++) {
+
+		wprintw(display.border1, "-");
+
+	}
+
+	for(x = 0 ; x < (cols / 2) - 2; x++) {
+
+		wprintw(display.border2, "-");
+
+	}
+
+	wprintw(display.border2, " Debug ");
+
+	for(x = 0 ; x < (cols / 2) - 2; x++) {
+
+		wprintw(display.border2, "-");
+
+	}
+	for(x = 0 ; x < (cols / 2) - 4; x++) {
+
+		wprintw(display.border3, "-");
+
+	}
+
+	wprintw(display.border3, " Error ");
+
+	for(x = 0 ; x < (cols / 2) - 2; x++) {
+
+		wprintw(display.border3, "-");
+
+	}
+	
+	wrefresh(display.mainWindow);
+	wrefresh(display.border1);
+	wrefresh(display.outputWindow);
+	wrefresh(display.border2);
+	wrefresh(display.debugWindow);
+	wrefresh(display.border3);
+	wrefresh(display.errorWindow);
+
+}
+
+void clearNC() {
+
+	endwin();
+
+}
 
 /* initGlobals() - initalise all global vars */
 
@@ -402,8 +503,8 @@ void initGlobals() {
 int openPort(char *portName, char *use) {
 
 	int fd;
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sOpening serial port %s for %s..\n", outputBuffer, portName, use);
-	strcpy(outputBuffer, printBuffer);
+	wprintw(display.outputWindow, "Opening serial port %s for %s..\n", portName, use);
+	wrefresh(display.outputWindow);
 
 	if ((fd = open(portName, O_RDWR | O_NOCTTY | O_NDELAY)) < 0) {  // Try to open the port
 		printf("Port attempted: %s for %s\n", portName, use);
@@ -427,8 +528,8 @@ int openPort(char *portName, char *use) {
 
 int openPty(ptyInfo *pty, char *use) {
 
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sOpening pty for %s..\n", outputBuffer, use);
-	strcpy(outputBuffer, printBuffer);
+	wprintw(display.outputWindow, "Opening pty for %s..\n", use);
+	wrefresh(display.outputWindow);
 	if((pty->master = posix_openpt(O_RDWR | O_NOCTTY | O_NDELAY)) < 0) {  // Create our pty with posix_openpt()
 	
 		perror("Error opening pty");
@@ -456,17 +557,6 @@ int openPty(ptyInfo *pty, char *use) {
 
 }
 
-/* initBuffers() - Init output buffers */
-
-void initBuffers() {
-
-	outputBuffer = calloc(DISPLAY_BUFFER_SZ, sizeof(char));
-	errorBuffer = calloc(DISPLAY_BUFFER_SZ, sizeof(char));
-	debugBuffer = calloc(DISPLAY_BUFFER_SZ, sizeof(char));
-	printBuffer = calloc(DISPLAY_BUFFER_SZ, sizeof(char));
-
-}
-
 /* openJoystick() - Open the joystick port portName */
 
 int openJoystick() {
@@ -478,8 +568,8 @@ int openJoystick() {
 	char name[NAME_LENGTH] = "Unknown";
 	int fd, efd, i;
 
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sOpening joystick %s..\n", outputBuffer, configInfo.joystickPortFile);
-	strcpy(outputBuffer, printBuffer);
+	wprintw(display.outputWindow, "Opening joystick %s..\n", configInfo.joystickPortFile);
+	wrefresh(display.outputWindow);
 	if ((fd = open(configInfo.joystickPortFile, O_RDWR | O_NONBLOCK)) < 0) {  // Open joystick port in non-blocking mode
 		perror("Error opening joystick port");  // Error opening port
 		return -1;
@@ -513,8 +603,8 @@ int openJoystick() {
 		//printf("Joystick (%s) initialised with %d axes and %d buttons.\n", name, joystickState.axes, joystickState.buttons);  // Button map is OK, print joystick info
 	}
 
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sOpening joystick event file %s..\n", outputBuffer, configInfo.joystickEventFile);
-	strcpy(outputBuffer, printBuffer);
+	wprintw(display.outputWindow, "Opening joystick event file %s..\n", configInfo.joystickEventFile);
+	wrefresh(display.outputWindow);
 	if ((efd = open(configInfo.joystickEventFile, O_RDWR)) < 0) {  // Open joystick port in non-blocking mode
 		perror("Error opening joystick event");  // Error opening port
 		return -1;
@@ -963,8 +1053,8 @@ void initTimer() {
 	struct sigaction saCtrl;
 	struct itimerval timerCtrl;
 
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sSetting up pulse timer..\n", outputBuffer);
-	strcpy(outputBuffer, printBuffer);
+	wprintw(display.outputWindow, "Setting up pulse timer..\n");
+	wrefresh(display.outputWindow);
 
 	memset(&saCtrl, 0, sizeof (saCtrl));                       // Make signal object
 	saCtrl.sa_handler = &handleTimer;                   // Set signal function handler in 'saCtrl'
@@ -975,8 +1065,8 @@ void initTimer() {
 	timerCtrl.it_interval.tv_sec = 0;
 	timerCtrl.it_interval.tv_usec = 1000; // Set timer reset to 1ms
 
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sStarting pulse timer..\n", outputBuffer);
-	strcpy(outputBuffer, printBuffer);
+	wprintw(display.outputWindow, "Starting pulse timer..\n");
+	wrefresh(display.outputWindow);
 
 	setitimer(ITIMER_REAL, &timerCtrl, NULL);               // Start the timer
 
@@ -1331,8 +1421,8 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 					msg->readBytes++;			       // Increment readBytes
 
 					#if DEBUG_LEVEL == 3
-					snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sMSG: %2x ", debugBuffer, testByte);
-					strcpy(debugBuffer, printBuffer);
+					wprintw(display.debugWindow, "MSG: %2x ", testByte);
+					wrefresh(display.debugWindow);
 					//printf("BYTE[%3d/%3d - HS:%d]: %2x\n", msg->readBytes, msg->length, signalInfo.handShook, testByte); // Print out each received byte	
 					#endif		
 
@@ -1340,8 +1430,8 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 				#if DEBUG_LEVEL == 3
 				else {
 
-					snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x\n", debugBuffer, testByte);
-					strcpy(debugBuffer, printBuffer);
+					wprintw(display.debugWindow, "%2x\n", testByte);
+					wrefresh(display.debugWindow);
 				}
 				#endif
 
@@ -1350,8 +1440,8 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 				msg->messageBuffer[msg->readBytes] = testByte; // Add the new byte to our message buffer
 				msg->readBytes++;			       // Increment readBytes
 				#if DEBUG_LEVEL == 3
-				snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, testByte);
-				strcpy(debugBuffer, printBuffer);
+				wprintw(display.debugWindow, "%2x ", testByte);
+				wrefresh(display.debugWindow);
 				//printf("BYTE[%3d/%3d - HS:%d]: %2x\n", msg->readBytes, msg->length, signalInfo.handShook, testByte); // Print out each received byte	
 				#endif	
 
@@ -1368,8 +1458,8 @@ int checkXBeeMessages(int msgPort, messageState *msg) {
 	} else { // Message is finished, process it
 
 		#if DEBUG_LEVEL == 3
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\n", debugBuffer);
-		strcpy(debugBuffer, printBuffer);
+		wprintw(display.debugWindow, "\n");
+		wrefresh(display.debugWindow);
 		#endif	
 
 		if(msg->length > 0) { // Message is finished, process it
@@ -1516,8 +1606,8 @@ void processMessage(messageState *msg) {
 
 	if(msgType == MTYPE_PING) { // We got a ping, send an ack
 
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s..connection complete!\n", outputBuffer);
-		strcpy(outputBuffer, printBuffer);
+		wprintw(display.outputWindow, "..connection complete!\n");
+		wrefresh(display.outputWindow);
 
 		sendAck(msg);		
 
@@ -1530,8 +1620,8 @@ void processMessage(messageState *msg) {
 
 		} else {
 
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s.Got ping reply w/ invalid data..", debugBuffer);
-			strcpy(debugBuffer, printBuffer);
+			wprintw(display.outputWindow, ".Got ping reply w/ invalid data..");
+			wrefresh(display.outputWindow);
 
 		}
 
@@ -1548,18 +1638,16 @@ void processMessage(messageState *msg) {
 	
 	} else if(msgType == MTYPE_DEBUG) { // This is a debug message, print it
 	
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sDEBUG MSG from UAV: ", outputBuffer);
-		strcpy(outputBuffer, printBuffer);
+		wprintw(display.outputWindow, "DEBUG MSG from UAV: ");
 
 		for(x = 3 ; x < msg->length - 1 ; x++) {
 		
 		
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%c", outputBuffer, msg->messageBuffer[x]);
-			strcpy(outputBuffer, printBuffer);
+			wprintw(display.outputWindow, "%c", msg->messageBuffer[x]);
 		
 		}
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\n", outputBuffer);
-		strcpy(outputBuffer, printBuffer);
+		wprintw(display.outputWindow, "\n");
+		wrefresh(display.outputWindow);
 
 	} else if(msgType == MTYPE_REQ_CFG) {
 
@@ -1578,8 +1666,8 @@ void processMessage(messageState *msg) {
 		airframeState.commBatteryVoltage = airframeState.commBatteryVoltage | msg->messageBuffer[7];
 		airframeState.videoBatteryVoltage = msg->messageBuffer[8] << 8;
 		airframeState.videoBatteryVoltage = airframeState.videoBatteryVoltage | msg->messageBuffer[9];
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sUAV RSSI %4d MBATT %4d CBATT %4d VBATT %4d\n", debugBuffer, signalInfo.remoteRSSI, airframeState.mainBatteryVoltage, airframeState.commBatteryVoltage, airframeState.videoBatteryVoltage);
-		strcpy(debugBuffer, printBuffer);
+		wprintw(display.debugWindow, "\nUAV RSSI %4d MBATT %4d CBATT %4d VBATT %4d", signalInfo.remoteRSSI, airframeState.mainBatteryVoltage, airframeState.commBatteryVoltage, airframeState.videoBatteryVoltage);
+		wrefresh(display.debugWindow);
 
 		signalInfo.remotedBm = ((signalInfo.remoteRSSI + 5928) / 41) - 256;
 
@@ -1594,8 +1682,8 @@ void processMessage(messageState *msg) {
 		relay.commBatteryVoltage = relay.commBatteryVoltage | msg->messageBuffer[5];
 		relay.videoBatteryVoltage = msg->messageBuffer[6] << 8;
 		relay.videoBatteryVoltage = relay.videoBatteryVoltage | msg->messageBuffer[7];
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGCS RSSI %4d CBATT %4d VBATT %4d\n", debugBuffer, signalInfo.localRSSI, relay.commBatteryVoltage, relay.videoBatteryVoltage);
-		strcpy(debugBuffer, printBuffer);
+		wprintw(display.debugWindow, "\nGCS RSSI %4d CBATT %4d VBATT %4d", signalInfo.localRSSI, relay.commBatteryVoltage, relay.videoBatteryVoltage);
+		wrefresh(display.debugWindow);
 
 		signalInfo.localdBm = ((signalInfo.localRSSI + 5928) / 41) - 256;
 		if(signalInfo.localdBm > signalInfo.maxdBm) { signalInfo.maxdBm = signalInfo.localdBm; }
@@ -1614,23 +1702,23 @@ void writePortMsg(int outputPort, char *portName, unsigned char *message, int me
 	if(message[1] != MTYPE_HEARTBEAT) {
 
 		int x;
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sWRITING[%02d]: ", debugBuffer, messageSize);
-		strcpy(debugBuffer, printBuffer);
+		wprintw(display.debugWindow, "WRITING[%02d]: ", messageSize);
+
 		for(x = 0 ; x < messageSize ; x++) {
 		
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, message[x]);
-			strcpy(debugBuffer, printBuffer);
+			wprintw(display.debugWindow, "%2x ", message[x]);
 	
 		}
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s\n", debugBuffer);
-		strcpy(debugBuffer, printBuffer);
+		wprintw(display.debugWindow, "\n");
+		wrefresh(display.debugWindow);
+
 	}
 	#endif
 	msgWrote = write(outputPort, message, messageSize);  // write() and store written byte count in msgWrote
 	if(msgWrote != messageSize) { // If written byte count is not expected value
 				
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%serror writing to %s, wrote: %d/%d bytes.\n", errorBuffer, portName, msgWrote, messageSize);  // Output error and info on what happened
-		strcpy(errorBuffer, printBuffer);
+		wprintw(display.errorWindow, "error writing to %s, wrote: %d/%d bytes.\n", portName, msgWrote, messageSize);  // Output error and info on what happened
+		wrefresh(display.errorWindow);
 
 	}
 
@@ -1644,13 +1732,13 @@ unsigned char generateChecksum(unsigned char *message, int length) {
 	int x;
 
 	#if DEBUG_LEVEL == 21
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sGENCHK[%2d]: ", debugBuffer, length);
+	wprintw(display.debugWindow, "GENCHK[%2d]: ", length);
 	for(x = 0 ; x < length ; x++) {
 
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, (unsigned int)message[x]); // Print the whole message in hex
+		wprintw(display.debugWindow, "%2x ", (unsigned int)message[x]); // Print the whole message in hex
 
 	}
-	printf("CHK: "); // Print the checksum marker
+	wprintw(display.debugWindow, "CHK: "); // Print the checksum marker
 	#endif	
 
 	for(x = 0 ; x < length ; x++) {
@@ -1660,7 +1748,8 @@ unsigned char generateChecksum(unsigned char *message, int length) {
 	}
 
 	#if DEBUG_LEVEL == 21
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x\n\n", debugBuffer, checksum); // Print the checksum
+	wprintw(display.debugWindow, "%2x\n\n", checksum); // Print the checksum
+	wrefresh(display.debugWindow);
 	#endif	
 
 	return checksum;
@@ -1675,16 +1764,14 @@ int testChecksum(unsigned char *message, int length) {
 	int x;
 
 	#if DEBUG_LEVEL == 3
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sCHKMSG[%2d]: ", debugBuffer, length);
-	strcpy(debugBuffer, printBuffer);
+	wprintw(display.debugWindow, "CHKMSG[%2d]: ", length);
+
 	for(x = 0 ; x < length ; x++) {
 
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, (unsigned int)message[x]); // Print the whole message in hex
-		strcpy(debugBuffer, printBuffer);
+		wprintw(display.debugWindow, "%2x ", (unsigned int)message[x]); // Print the whole message in hex
 
 	}
-	printf("CHK: "); // Print the checksum marker
-	strcpy(debugBuffer, printBuffer);
+	wprintw(display.debugWindow, "CHK: "); // Print the checksum marker
 	#endif	
 
 	for(x = 0 ; x < length ; x++) {
@@ -1694,39 +1781,37 @@ int testChecksum(unsigned char *message, int length) {
 	}
 
 	#if DEBUG_LEVEL == 3
-	snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x\n\n", debugBuffer, checksum); // Print the checksum
-	strcpy(debugBuffer, printBuffer);
+	wprintw(display.debugWindow, "%2x\n\n", checksum); // Print the checksum
+	wrefresh(display.debugWindow);
 	#endif	
 
 	if(checksum == 0x00) {
 
 		#if DEBUG_LEVEL == 5
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s++ Good checksum (length: %d): ", debugBuffer, length);
-		strcpy(debugBuffer, printBuffer);
+		wprintw(display.debugWindow, "++ Good checksum (length: %d): ", length);
+
 		for(x = 0 ; x < length ; x++) {
 				
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, (unsigned int)message[x]); // Print the whole message in hex			
-			strcpy(debugBuffer, printBuffer);
+			wprintw(display.debugWindow, "%2x ", (unsigned int)message[x]); // Print the whole message in hex			
 		
 		}
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sCHK: %2x\n", debugBuffer, checksum); // Print the checksum
-		strcpy(debugBuffer, printBuffer);
+		wprintw(display.debugWindow, "CHK: %2x\n", checksum); // Print the checksum
+		wrefresh(display.debugWindow);
 		#endif	
 		return 1;  // Checksum passed!
 
 	} else {
 
 		#if DEBUG_LEVEL == 5
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s-- Bad checksum (length: %d): ", debugBuffer, length);
-		strcpy(debugBuffer, printBuffer);
+		wprintw(display.debugWindow, "-- Bad checksum (length: %d): ", length);
+
 		for(x = 0 ; x < length ; x++) {
 				
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%s%2x ", debugBuffer, (unsigned int)message[x]); // Print the whole message in hex			
-			strcpy(debugBuffer, printBuffer);
+			wprintw(display.debugWindow, "%2x ", (unsigned int)message[x]); // Print the whole message in hex			
 		
 		}
-		snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sCHK: %2x\n", debugBuffer, checksum); // Print the checksum
-		strcpy(debugBuffer, printBuffer);
+		wprintw(display.debugWindow, "CHK: %2x\n", checksum); // Print the checksum
+		wrefresh(display.debugWindow);
 		#endif	
 		return 0;
 
@@ -2085,8 +2170,8 @@ int checkSignal() {
 			signalInfo.handShook = 0;  // Turn off handshake so we can resync
 			signalInfo.lostSignalTime = time(NULL); // Store time we lost the signal
 			#if DEBUG_LEVEL != 4 && DEBUG_LEVEL != 5
-			snprintf(printBuffer, DISPLAY_BUFFER_SZ, "%sLost signal!  Attempting to resync.\n", outputBuffer);
-			strcpy(outputBuffer, printBuffer);
+			wprintw(display.outputWindow, "Lost signal!  Attempting to resync.\n");
+			wrefresh(display.outputWindow);
 			#endif
 			return 0;
 
@@ -2174,166 +2259,75 @@ char *fgetsNoNewline(char *s, int n, FILE *stream) {
 
 }
 
-int limitLines(char *buffer, int maxLines) {
-
-	int lineCount = 0;
-	int length = strlen(buffer);
-	int x;
-
-	for(x = 0 ; x < length ; x++) {
-
-		if(buffer[x] == '\n') {
-
-			lineCount++;
-
-		}
-
-	}
-
-	int removeLines;
-	int removed = 0;
-
-	if(lineCount - maxLines > 0) {
-
-		removeLines = lineCount - maxLines;
-		removed = 1;
-
-	} else {
-
-		removeLines = 0;
-
-	}
-	int offset;
-
-	x = 0;
-	while(x < length && removeLines > 0) {
-
-		if(buffer[x] == '\n') { // Found the end of a line
-
-			offset = x + 1;  // Store the offset
-
-			for(x =  0 ; x < length ; x++) {
-
-				buffer[x] = buffer[offset + x];
-		
-			}
-
-			x = 0; // Zero out x
-			removeLines--;
-
-		}
-		
-		x++;
-
-	}
-
-	/*length = strlen(buffer);
-
-	if(buffer[length - 1] != '\n') { 
-
-		char _buffer[DISPLAY_BUFFER_SZ];
-		snprintf(_buffer, DISPLAY_BUFFER_SZ, "%s\n", buffer);
-		strcpy(buffer, _buffer);
-
-	}*/
-
-	
-	if(removed) {
-
-		return maxLines;
-
-	} else {
-
-		return lineCount;
-
-	}
-	
-
-}
-
 void printOutput() {
 
 	time_t currentTime = time(NULL);
 	char *buffer;
-	struct winsize w;
-    	ioctl(STDOUT_FILENO, TIOCGWINSZ, &w); // get current window size
 
-	int cols = w.ws_col;
+	int rows, cols;
+	getmaxyx(display.mainWindow, rows, cols);
 	buffer = calloc(cols, sizeof(char));
 
-	int outputAlloc = 10;
-	int debugAlloc = 5;
-	int errorAlloc = 2;
 	int size;
 
-		int outputLines = limitLines(outputBuffer, outputAlloc);
-		int debugLines = limitLines(debugBuffer, debugAlloc);
-		int errorLines = limitLines(errorBuffer, errorAlloc);
-
 		int x;
-		printf("\033[2J\033[0;0H");
 
 		size = snprintf(buffer, cols, " js_crl version %d.%d.%d-%s ", VERSION_MAJOR, VERSION_MINOR, VERSION_MOD, VERSION_TAG);
 
+		wmove(display.mainWindow, 0, 0);
+
 		for(x = 0 ; x < (cols - size) / 2 ; x++) {
 
-			printf("-");
+			wprintw(display.mainWindow, "-");
 
 		}
 
-		printf("%s", buffer);
+		wprintw(display.mainWindow, "%s", buffer);
 
 		for(x = 0 ; x < (cols - size) / 2 ; x++) {
 
-			printf("-");
+			wprintw(display.mainWindow, "-");
 
 		}
 		
-		printf("\n");
-		double diff = difftime(currentTime, startTime);
+		wprintw(display.mainWindow, "\n");
 
-		if(diff < (double)configInfo.throttleSafety) {
-
-			printf("\nThrottle Safety Remaining: %3.0f\n\n\n", (double)configInfo.throttleSafety - diff);
-
-		}
-
-		printf("                  ");
+		wprintw(display.mainWindow, "                  ");
 
 		for(x = 0 ; x < BUTTON_COUNT ; x++) {
 
-			printf("  [%2d]  ", x);
+			wprintw(display.mainWindow, "  [%2d]  ", x);
 
 		}
 
-		printf("\nJoystick State:   ");
+		wprintw(display.mainWindow, "\nJoystick State:   ");
 
 		for (x = 0; x < joystickState.axes ; x++) {
 		
-			printf("%6d  ", joystickState.axis[x]);  // Print all joystick axes
+			wprintw(display.mainWindow, "%6d  ", joystickState.axis[x]);  // Print all joystick axes
 
 		}
-		printf("\n");
-		printf("Servo State:      ");
+		wprintw(display.mainWindow, "\n");
+		wprintw(display.mainWindow, "Servo State:      ");
 		for(x = 0 ; x < SERVO_COUNT ; x++) {
 
-			printf("  %4d  ", airframeState.servos[x] + 1);  // Print all airframe servos
+			wprintw(display.mainWindow, "  %4d  ", airframeState.servos[x] + 1);  // Print all airframe servos
 
 		}
-		printf("\n");
-		printf("Button State:   ");
+		wprintw(display.mainWindow, "\n");
+		wprintw(display.mainWindow, "Button State:   ");
 		for(x = 0 ; x < BUTTON_COUNT ; x++) {
 
-			printf("      %2d", airframeState.buttons[x]);  // Print all button states
+			wprintw(display.mainWindow, "      %2d", airframeState.buttons[x]);  // Print all button states
 	
 		}
-		printf("\n");
+		wprintw(display.mainWindow, "\n");
 		for(x = 0 ; x < cols ; x++) {
 
-			printf("-");
+			wprintw(display.mainWindow, "-");
 
 		}
-		printf("\n");		
+		wprintw(display.mainWindow, "\n");		
 
 		// quick & dirty for now	 DEBUG
 
@@ -2363,105 +2357,38 @@ void printOutput() {
 		rssiBars(signalInfo.remotedBm, remoteBars);
 		rssiBars(signalInfo.videodBm, videoBars);				
 
-		printf("GCS RSSI:         %4d dBm [%s]                    videoRx RSSI:  %4d dBm [%s]\n", signalInfo.localdBm, localBars, signalInfo.videoRSSI, videoBars);
-		printf("GCS Comm Battery: %4d (%5.3f%% - %5.2fV)  Video Battery:  %4d (%5.3f%% - %5.2fV)\n", relay.commBatteryVoltage, gcsCommPercent, 
+		wprintw(display.mainWindow, "GCS RSSI:         %4d dBm [%s]                    videoRx RSSI:  %4d dBm [%s]\n", signalInfo.localdBm, localBars, signalInfo.videoRSSI, videoBars);
+		wprintw(display.mainWindow, "GCS Comm Battery: %4d (%5.3f%% - %5.2fV)  Video Battery:  %4d (%5.3f%% - %5.2fV)\n", relay.commBatteryVoltage, gcsCommPercent, 
 									gcsCommBattery, relay.videoBatteryVoltage, gcsVideoPercent, gcsVideoBattery);
 
-		printf("\nUAV RSSI:         %4d dBm [%s]\n", signalInfo.remotedBm, remoteBars);
+		wprintw(display.mainWindow, "\nUAV RSSI:         %4d dBm [%s]\n", signalInfo.remotedBm, remoteBars);
 
-		printf("UAV Main Battery: %4d (%5.3f%% - %5.2fV)   Comm Battery:  %4d (%5.3f%% - %5.2fV)  Video Battery: %4d (%5.3f%% - %5.2fV)\n", airframeState.mainBatteryVoltage, 
+		wprintw(display.mainWindow, "UAV Main Battery: %4d (%5.3f%% - %5.2fV)   Comm Battery:  %4d (%5.3f%% - %5.2fV)  Video Battery: %4d (%5.3f%% - %5.2fV)\n", airframeState.mainBatteryVoltage, 
 									uavMainPercent, uavMainBattery, airframeState.commBatteryVoltage, uavCommPercent, uavCommBattery, 
 									airframeState.videoBatteryVoltage, uavVideoPercent, uavVideoBattery);
 
-		printf("Max: %4d Min: %4d\n", signalInfo.maxdBm, signalInfo.mindBm);
+		wprintw(display.mainWindow, "Max: %4d Min: %4d\n", signalInfo.maxdBm, signalInfo.mindBm);
 
 		free(localBars);
 		free(remoteBars);
 		free(videoBars);
+		free(buffer);
 
-		size = snprintf(buffer, cols, " Output ");
+		double diff = difftime(currentTime, startTime);
 
-		for(x = 0 ; x < (cols - size) / 2 ; x++) {
+		if(diff < (double)configInfo.throttleSafety) {
 
-			printf("-");
-
-		}
-
-		printf("%s", buffer);
-
-		for(x = 0 ; x < (cols - size) / 2 ; x++) {
-
-			printf("-");
-
-		}
-		
-		printf("\n");
-
-		printf("%s", outputBuffer);
-		
-		for(x = 0 ; x < (outputAlloc - outputLines) ; x++) {
-
-			printf("\n");
-
-		}	
-
-		size = snprintf(buffer, cols, " Debug ");
-
-		for(x = 0 ; x < (cols - size) / 2 ; x++) {
-
-			printf("-");
+			mvwprintw(display.mainWindow, 1, 0, "Throttle Safety Remaining: %3.0f", (double)configInfo.throttleSafety - diff);
 
 		}
 
-		printf("%s", buffer);
-
-		for(x = 0 ; x < (cols - size) / 2 ; x++) {
-
-			printf("-");
-
-		}
-		
-		printf("\n");
-
-		printf("%s", debugBuffer);
-
-		for(x = 0 ; x < (debugAlloc - debugLines) ; x++) {
-
-			printf("\n");
-
-		}
-
-		size = snprintf(buffer, cols, " Error ");
-
-		for(x = 0 ; x < (cols - size) / 2 ; x++) {
-
-			printf("-");
-
-		}
-
-		printf("%s", buffer);
-
-		for(x = 0 ; x < (cols - size) / 2 ; x++) {
-
-			printf("-");
-
-		}
-		
-		printf("\n");
-
-		printf("%s", errorBuffer);
-
-		for(x = 0 ; x < (errorAlloc - errorLines) ; x++) {
-
-			printf("\n");
-
-		}
-	
-
-
-		fflush(stdout);
-
-	free(buffer);
+		wrefresh(display.mainWindow);
+		wrefresh(display.border1);
+		wrefresh(display.outputWindow);
+		wrefresh(display.border2);
+		wrefresh(display.debugWindow);
+		wrefresh(display.border3);
+		wrefresh(display.errorWindow);
 
 }
 
