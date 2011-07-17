@@ -22,11 +22,11 @@
 [PPM Min Pulse]
 2000
 [PPM Max Pulse]
-4000
+3800
 [PPM High Pulse]
-400
+100
 [PPM Sync Pulse]
-8000
+6500
 [Status Interval Signal Lost]
 100
 [Status Interval OK]
