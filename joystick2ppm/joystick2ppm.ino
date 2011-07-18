@@ -22,7 +22,7 @@
 
 /* Including things */
 
-#include "WProgram.h"
+#include "Arduino.h"
 #include "joystickRC_structs.h"
 
 /* This is the defining moment of the file */
@@ -124,11 +124,11 @@ void setup() {
 
 	randomSeed(analogRead(7));          // Seed our random number gen with an unconnected pin's static
 
-	Serial.begin(115200);               // Open XBee/GCS Serial
+	Serial.begin(57600);               // Open XBee/GCS Serial
 	Serial.flush();
 	pinMode(13, OUTPUT);
 	#ifdef __AVR_ATmega644P__
-	Serial1.begin(115200);              // Open PPZ Serial
+	Serial1.begin(57600);              // Open PPZ Serial
 	Serial1.flush();
 	#endif
 
