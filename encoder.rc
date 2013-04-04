@@ -1,0 +1,46 @@
+[PPM Encoder Config]
+[Debug Pin]
+10
+[Status LED Pin]
+13
+[Navlight Pin]
+11
+[RSSI Pin]
+12
+[Main Battery Pin]
+1
+[Comm Battery Pin]
+2
+[Video Battery Pin]
+3
+[Lost Message Threshold]
+1000
+[Heartbeat Interval]
+500
+[Ping Interval]
+100
+[PPM Min Pulse]
+2000
+[PPM Max Pulse]
+3800
+[PPM High Pulse]
+100
+[PPM Sync Pulse]
+6500
+[Status Interval Signal Lost]
+100
+[Status Interval OK]
+1000
+[Navlight Interval]
+1000
+[Servo Count]
+8
+[Button Count]
+12
+[Button Pin Map]
+2,4,10,5,255,255,255,255,255,255,255,255
+[ADC Sample Rate]
+1000
+[Voltage Samples]
+2
+

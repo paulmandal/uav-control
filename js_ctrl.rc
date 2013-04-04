@@ -1,0 +1,27 @@
+[XBee Port File]
+/dev/ttyUSB0
+[Joystick Port File]
+/dev/input/js0
+[Joystick Event File]
+/dev/input/event4
+[Joystick Discard Threshold]
+5000
+[PPM Interval]
+20
+[Timeout Threshold]
+2
+[Button State Count]
+0,0,0,0,1,1,0,0,0,0,0,0
+[Context Button]
+5
+[Heartbeat Interval]
+500
+[Ping Interval]
+100
+[Servo Count]
+8
+[Button Count]
+12
+[Throttle Safety]
+10
+
